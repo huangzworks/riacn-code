@@ -8,69 +8,73 @@ import uuid
 
 QUIT = False
 
+# 代码清单 2-1
 # <start id="_1311_14471_8266"/>
 def check_token(conn, token):
-    return conn.hget('login:', token)   #A
+    return conn.hget('login:', token)   # 尝试获取并返回令牌对应的用户。
 # <end id="_1311_14471_8266"/>
-#A Fetch and return the given user, if available
-#END
 
+
+# 代码清单 2-2
 # <start id="_1311_14471_8265"/>
 def update_token(conn, token, user, item=None):
-    timestamp = time.time()                             #A
-    conn.hset('login:', token, user)                    #B
-    conn.zadd('recent:', token, timestamp)              #C
+    # 获取当前时间戳。
+    timestamp = time.time()
+    # 维持令牌与已登录用户之间的映射。
+    conn.hset('login:', token, user)
+    # 记录令牌最后一次出现的时间。
+    conn.zadd('recent:', token, timestamp)
     if item:
-        conn.zadd('viewed:' + token, item, timestamp)   #D
-        conn.zremrangebyrank('viewed:' + token, 0, -26) #E
+        # 记录用户浏览过的商品。
+        conn.zadd('viewed:' + token, item, timestamp)
+        # 移除旧的记录，只保留用户最近浏览过的25个商品。
+        conn.zremrangebyrank('viewed:' + token, 0, -26)
 # <end id="_1311_14471_8265"/>
-#A Get the timestamp
-#B Keep a mapping from the token to the logged-in user
-#C Record when the token was last seen
-#D Record that the user viewed the item
-#E Remove old items, keeping the most recent 25
-#END
 
+
+# 代码清单 2-3
 # <start id="_1311_14471_8270"/>
 QUIT = False
 LIMIT = 10000000
 
 def clean_sessions(conn):
     while not QUIT:
-        size = conn.zcard('recent:')                    #A
-        if size <= LIMIT:                               #B
-            time.sleep(1)                               #B
+        # 找出目前已有令牌的数量。
+        size = conn.zcard('recent:')
+        # 令牌数量未超过限制，休眠并在之后重新检查。
+        if size <= LIMIT:
+            time.sleep(1)
             continue
 
-        end_index = min(size - LIMIT, 100)              #C
-        tokens = conn.zrange('recent:', 0, end_index-1) #C
+        #  获取需要移除的令牌ID。
+        end_index = min(size - LIMIT, 100)
+        tokens = conn.zrange('recent:', 0, end_index-1)
 
-        session_keys = []                               #D
-        for token in tokens:                            #D
-            session_keys.append('viewed:' + token)      #D
+        # 为那些将要被删除的令牌构建键名。
+        session_keys = []
+        for token in tokens:
+            session_keys.append('viewed:' + token)
 
-        conn.delete(*session_keys)                      #E
-        conn.hdel('login:', *tokens)                    #E
-        conn.zrem('recent:', *tokens)                   #E
+        # 移除最旧的那些令牌。
+        conn.delete(*session_keys)
+        conn.hdel('login:', *tokens)
+        conn.zrem('recent:', *tokens)
 # <end id="_1311_14471_8270"/>
-#A Find out how many tokens are known
-#B We are still under our limit, sleep and try again
-#C Fetch the token ids that should be removed
-#D Prepare the key names for the tokens to delete
-#E Remove the oldest tokens
-#END
 
+
+# 代码清单 2-4
 # <start id="_1311_14471_8279"/>
 def add_to_cart(conn, session, item, count):
     if count <= 0:
-        conn.hrem('cart:' + session, item)          #A
+        # 从购物车里面移除指定的商品。
+        conn.hrem('cart:' + session, item) 
     else:
-        conn.hset('cart:' + session, item, count)   #B
+        # 将指定的商品添加到购物车。
+        conn.hset('cart:' + session, item, count) 
 # <end id="_1311_14471_8279"/>
-#A Remove the item from the cart
-#B Add the item to the cart
-#END
 
+
+# 代码清单 2-5
 # <start id="_1311_14471_8271"/>
 def clean_full_sessions(conn):
     while not QUIT:
@@ -85,76 +89,79 @@ def clean_full_sessions(conn):
         session_keys = []
         for sess in sessions:
             session_keys.append('viewed:' + sess)
-            session_keys.append('cart:' + sess)                    #A
+            session_keys.append('cart:' + sess)   # 新增加的这行代码用于删除旧会话对应用户的购物车。
 
         conn.delete(*session_keys)
         conn.hdel('login:', *sessions)
         conn.zrem('recent:', *sessions)
 # <end id="_1311_14471_8271"/>
-#A The required added line to delete the shopping cart for old sessions
-#END
 
+
+# 代码清单 2-6
 # <start id="_1311_14471_8291"/>
 def cache_request(conn, request, callback):
-    if not can_cache(conn, request):                #A
-        return callback(request)                    #A
+    # 对于不能被缓存的请求，直接调用回调函数。
+    if not can_cache(conn, request):
+        return callback(request)
 
-    page_key = 'cache:' + hash_request(request)     #B
-    content = conn.get(page_key)                    #C
+    # 将请求转换成一个简单的字符串键，方便之后进行查找。
+    page_key = 'cache:' + hash_request(request) 
+    # 尝试查找被缓存的页面。
+    content = conn.get(page_key)
 
     if not content:
-        content = callback(request)                 #D
-        conn.setex(page_key, content, 300)          #E
+        # 如果页面还没有被缓存，那么生成页面。
+        content = callback(request)
+        # 将新生成的页面放到缓存里面。
+        conn.setex(page_key, content, 300)
 
-    return content                                  #F
+    # 返回页面。
+    return content
 # <end id="_1311_14471_8291"/>
-#A If we cannot cache the request, immediately call the callback
-#B Convert the request into a simple string key for later lookups
-#C Fetch the cached content if we can, and it is available
-#D Generate the content if we can't cache the page, or if it wasn't cached
-#E Cache the newly generated content if we can cache it
-#F Return the content
-#END
 
+
+# 代码清单 2-7
 # <start id="_1311_14471_8287"/>
 def schedule_row_cache(conn, row_id, delay):
-    conn.zadd('delay:', row_id, delay)           #A
-    conn.zadd('schedule:', row_id, time.time())  #B
+    # 先设置数据行的延迟值。
+    conn.zadd('delay:', row_id, delay) 
+    # 立即缓存数据行。
+    conn.zadd('schedule:', row_id, time.time()) 
 # <end id="_1311_14471_8287"/>
-#A Set the delay for the item first
-#B Schedule the item to be cached now
-#END
 
 
+# 代码清单 2-8
 # <start id="_1311_14471_8292"/>
 def cache_rows(conn):
     while not QUIT:
-        next = conn.zrange('schedule:', 0, 0, withscores=True)  #A
+        # 尝试获取下一个需要被缓存的数据行以及该行的调度时间戳，
+        # 命令会返回一个包含零个或一个元组（tuple）的列表。
+        next = conn.zrange('schedule:', 0, 0, withscores=True) 
         now = time.time()
         if not next or next[0][1] > now:
-            time.sleep(.05)                                     #B
+            # 暂时没有行需要被缓存，休眠50毫秒后重试。
+            time.sleep(.05) 
             continue
 
         row_id = next[0][0]
-        delay = conn.zscore('delay:', row_id)                   #C
+        # 获取下一次调度前的延迟时间。
+        delay = conn.zscore('delay:', row_id)
         if delay <= 0:
-            conn.zrem('delay:', row_id)                         #D
-            conn.zrem('schedule:', row_id)                      #D
-            conn.delete('inv:' + row_id)                        #D
+            # 不必再缓存这个行，将它从缓存中移除。
+            conn.zrem('delay:', row_id) 
+            conn.zrem('schedule:', row_id)
+            conn.delete('inv:' + row_id)
             continue
 
-        row = Inventory.get(row_id)                             #E
-        conn.zadd('schedule:', row_id, now + delay)             #F
-        conn.set('inv:' + row_id, json.dumps(row.to_dict()))    #F
+        # 读取数据行。
+        row = Inventory.get(row_id)
+        # 更新调度时间并设置缓存值。
+        conn.zadd('schedule:', row_id, now + delay)         
+        conn.set('inv:' + row_id, json.dumps(row.to_dict())) 
 # <end id="_1311_14471_8292"/>
-#A Find the next row that should be cached (if any), including the timestamp, as a list of tuples with zero or one items
-#B No rows can be cached now, so wait 50 milliseconds and try again
-#C Get the delay before the next schedule
-#D The item shouldn't be cached anymore, remove it from the cache
-#E Get the database row
-#F Update the schedule and set the cache value
-#END
 
+
+# 代码清单 2-9
 # <start id="_1311_14471_8298"/>
 def update_token(conn, token, user, item=None):
     timestamp = time.time()
@@ -163,39 +170,39 @@ def update_token(conn, token, user, item=None):
     if item:
         conn.zadd('viewed:' + token, item, timestamp)
         conn.zremrangebyrank('viewed:' + token, 0, -26)
-        conn.zincrby('viewed:', item, -1)                   #A
+        conn.zincrby('viewed:', item, -1)                   # 这行代码是新添加的。
 # <end id="_1311_14471_8298"/>
-#A The line we need to add to update_token()
-#END
 
+
+# 代码清单 2-10
 # <start id="_1311_14471_8288"/>
 def rescale_viewed(conn):
     while not QUIT:
-        conn.zremrangebyrank('viewed:', 0, -20001)      #A
-        conn.zinterstore('viewed:', {'viewed:': .5})    #B
-        time.sleep(300)                                 #C
+        # 删除所有排名在20 000名之后的商品。
+        conn.zremrangebyrank('viewed:', 0, -20001) 
+        # 将浏览次数降低为原来的一半
+        conn.zinterstore('viewed:', {'viewed:': .5}) 
+        # 5分钟之后再执行这个操作。
+        time.sleep(300) 
 # <end id="_1311_14471_8288"/>
-#A Remove any item not in the top 20,000 viewed items
-#B Rescale all counts to be 1/2 of what they were before
-#C Do it again in 5 minutes
-#END
 
+
+# 代码清单 2-11
 # <start id="_1311_14471_8289"/>
 def can_cache(conn, request):
-    item_id = extract_item_id(request)          #A
-    if not item_id or is_dynamic(request):      #B
+    # 尝试从页面里面取出商品ID。
+    item_id = extract_item_id(request)
+    # 检查这个页面能否被缓存以及这个页面是否为商品页面。
+    if not item_id or is_dynamic(request):
         return False
-    rank = conn.zrank('viewed:', item_id)       #C
-    return rank is not None and rank < 10000    #D
+    # 取得商品的浏览次数排名。
+    rank = conn.zrank('viewed:', item_id)
+    # 根据商品的浏览次数排名来判断是否需要缓存这个页面。
+    return rank is not None and rank < 10000 
 # <end id="_1311_14471_8289"/>
-#A Get the item id for the page, if any
-#B Check whether the page can be statically cached, and whether this is an item page
-#C Get the rank of the item
-#D Return whether the item has a high enough view count to be cached
-#END
 
 
-#--------------- Below this line are helpers to test the code ----------------
+#--------------- 以下是用于测试代码的辅助函数 --------------------------------
 
 def extract_item_id(request):
     parsed = urlparse.urlparse(request)
