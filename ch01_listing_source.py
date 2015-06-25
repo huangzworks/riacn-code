@@ -1,261 +1,241 @@
+# coding: utf-8
 
 import time
 import unittest
 
+
+# 代码清单 1-1
 '''
-# <start id="simple-string-calls"/>
-$ redis-cli                                 #A
-redis 127.0.0.1:6379> set hello world       #D
-OK                                          #E
-redis 127.0.0.1:6379> get hello             #F
-"world"                                     #G
-redis 127.0.0.1:6379> del hello             #H
-(integer) 1                                 #I
-redis 127.0.0.1:6379> get hello             #J
-(nil)
+$ redis-cli                                 # 启动redis-cli 客户端
+redis 127.0.0.1:6379> set hello world       # 将键 hello 的值设置为 world 。
+OK                                          # SET 命令在执行成功时返回 OK ，Python 客户端会将这个 OK 转换成 True
+redis 127.0.0.1:6379> get hello             # 获取储存在键 hello 中的值。
+"world"                                     # 键的值仍然是 world ，跟我们刚才设置的一样。
+redis 127.0.0.1:6379> del hello             # 删除这个键值对。
+(integer) 1                                 # 在对值进行删除的时候，DEL 命令将返回被成功删除的值的数量。
+redis 127.0.0.1:6379> get hello             # 因为键的值已经不存在，所以尝试获取键的值将得到一个 nil ，
+(nil)                                       # Python 客户端会将这个 nil 转换成 None。
 redis 127.0.0.1:6379> 
-# <end id="simple-string-calls"/>
-#A Start the redis-cli client up
-#D Set the key 'hello' to the value 'world'
-#E If a SET command succeeds, it returns 'OK', which turns into True on the Python side
-#F Now get the value stored at the key 'hello'
-#G It is still 'world', like we just set it
-#H Let's delete the key/value pair
-#I If there was a value to delete, DEL returns the number of items that were deleted
-#J There is no more value, so trying to fetch the value returns nil, which turns into None on the Python side
-#END
 '''
 
 
+# 代码清单 1-2
 '''
-# <start id="simple-list-calls"/>
-redis 127.0.0.1:6379> rpush list-key item   #A
-(integer) 1                                 #A
-redis 127.0.0.1:6379> rpush list-key item2  #A
-(integer) 2                                 #A
-redis 127.0.0.1:6379> rpush list-key item   #A
-(integer) 3                                 #A
-redis 127.0.0.1:6379> lrange list-key 0 -1  #B
-1) "item"                                   #B
-2) "item2"                                  #B
-3) "item"                                   #B
-redis 127.0.0.1:6379> lindex list-key 1     #C
-"item2"                                     #C
-redis 127.0.0.1:6379> lpop list-key         #D
-"item"                                      #D
-redis 127.0.0.1:6379> lrange list-key 0 -1  #D
-1) "item2"                                  #D
-2) "item"                                   #D
+redis 127.0.0.1:6379> rpush list-key item   # 在向列表推入新元素之后，该命令会返回列表的当前长度。
+(integer) 1                                 #
+redis 127.0.0.1:6379> rpush list-key item2  #
+(integer) 2                                 #
+redis 127.0.0.1:6379> rpush list-key item   #
+(integer) 3                                 #
+redis 127.0.0.1:6379> lrange list-key 0 -1  # 使用0为范围的起始索引，-1为范围的结束索引，
+1) "item"                                   # 可以取出列表包含的所有元素。
+2) "item2"                                  #
+3) "item"                                   #
+redis 127.0.0.1:6379> lindex list-key 1     # 使用LINDEX可以从列表里面取出单个元素。
+"item2"                                     #
+redis 127.0.0.1:6379> lpop list-key         # 从列表里面弹出一个元素，被弹出的元素不再存在于列表。
+"item"                                      #
+redis 127.0.0.1:6379> lrange list-key 0 -1  #
+1) "item2"                                  #
+2) "item"                                   #
 redis 127.0.0.1:6379> 
-# <end id="simple-list-calls"/>
-#A When we push items onto a LIST, the command returns the current length of the list
-#B We can fetch the entire list by passing a range of 0 for the start index, and -1 for the last index
-#C We can fetch individual items from the list with LINDEX
-#D By popping an item from the list, it is no longer available
-#END
 '''
 
 
+# 代码清单 1-3
 '''
-# <start id="simple-set-calls"/>
-redis 127.0.0.1:6379> sadd set-key item     #A
-(integer) 1                                 #A
-redis 127.0.0.1:6379> sadd set-key item2    #A
-(integer) 1                                 #A
-redis 127.0.0.1:6379> sadd set-key item3    #A
-(integer) 1                                 #A
-redis 127.0.0.1:6379> sadd set-key item     #A
-(integer) 0                                 #A
-redis 127.0.0.1:6379> smembers set-key      #B
-1) "item"                                   #B
-2) "item2"                                  #B
-3) "item3"                                  #B
-redis 127.0.0.1:6379> sismember set-key item4   #C
-(integer) 0                                     #C
-redis 127.0.0.1:6379> sismember set-key item    #C
-(integer) 1                                     #C
-redis 127.0.0.1:6379> srem set-key item2    #D
-(integer) 1                                 #D
-redis 127.0.0.1:6379> srem set-key item2    #D
-(integer) 0                                 #D
+redis 127.0.0.1:6379> sadd set-key item     # 在尝试将一个元素添加到集合的时候，
+(integer) 1                                 # 命令返回1表示这个元素被成功地添加到了集合里面，
+redis 127.0.0.1:6379> sadd set-key item2    # 而返回0则表示这个元素已经存在于集合中。
+(integer) 1                                 #
+redis 127.0.0.1:6379> sadd set-key item3    #
+(integer) 1                                 #
+redis 127.0.0.1:6379> sadd set-key item     #
+(integer) 0                                 #
+redis 127.0.0.1:6379> smembers set-key      # 获取集合包含的所有元素将得到一个由元素组成的序列，
+1) "item"                                   # Python客户端会将这个序列转换成Python集合。
+2) "item2"                                  #
+3) "item3"                                  #
+redis 127.0.0.1:6379> sismember set-key item4   # 检查一个元素是否存在于集合中，
+(integer) 0                                     # Python客户端会返回一个布尔值来表示检查结果。
+redis 127.0.0.1:6379> sismember set-key item    #
+(integer) 1                                     #
+redis 127.0.0.1:6379> srem set-key item2    # 在使用命令移除集合中的元素时，命令会返回被移除的元素数量。
+(integer) 1                                 #
+redis 127.0.0.1:6379> srem set-key item2    #
+(integer) 0                                 #
 redis 127.0.0.1:6379>  smembers set-key
 1) "item"
 2) "item3"
 redis 127.0.0.1:6379> 
-# <end id="simple-set-calls"/>
-#A When adding an item to a SET, Redis will return a 1 if the item is new to the set and 0 if it was already in the SET
-#B We can fetch all of the items in the SET, which returns them as a sequence of items, which is turned into a Python set from Python
-#C We can also ask Redis whether an item is in the SET, which turns into a boolean in Python
-#D When we attempt to remove items, our commands return the number of items that were removed
-#END
 '''
 
 
+# 代码清单 1-4
 '''
-# <start id="simple-hash-calls"/>
-redis 127.0.0.1:6379> hset hash-key sub-key1 value1 #A
-(integer) 1                                         #A
-redis 127.0.0.1:6379> hset hash-key sub-key2 value2 #A
-(integer) 1                                         #A
-redis 127.0.0.1:6379> hset hash-key sub-key1 value1 #A
-(integer) 0                                         #A
-redis 127.0.0.1:6379> hgetall hash-key              #B
-1) "sub-key1"                                       #B
-2) "value1"                                         #B
-3) "sub-key2"                                       #B
-4) "value2"                                         #B
-redis 127.0.0.1:6379> hdel hash-key sub-key2        #C
-(integer) 1                                         #C
-redis 127.0.0.1:6379> hdel hash-key sub-key2        #C
-(integer) 0                                         #C
-redis 127.0.0.1:6379> hget hash-key sub-key1        #D
-"value1"                                            #D
+redis 127.0.0.1:6379> hset hash-key sub-key1 value1 # 在尝试添加键值对到散列的时候，
+(integer) 1                                         # 命令会返回一个值来表示给定的键是否已经存在于散列里面。
+redis 127.0.0.1:6379> hset hash-key sub-key2 value2 #
+(integer) 1                                         #
+redis 127.0.0.1:6379> hset hash-key sub-key1 value1 #
+(integer) 0                                         #
+redis 127.0.0.1:6379> hgetall hash-key              # 获取散列包含的所有键值对，
+1) "sub-key1"                                       # Python客户端会将这些键值对转换为Python字典。
+2) "value1"                                         #
+3) "sub-key2"                                       #
+4) "value2"                                         #
+redis 127.0.0.1:6379> hdel hash-key sub-key2        # 在删除键值对的时候，
+(integer) 1                                         # 命令会返回一个值来表示给定的键在移除之前是否存在于散列里面。
+redis 127.0.0.1:6379> hdel hash-key sub-key2        #
+(integer) 0                                         #
+redis 127.0.0.1:6379> hget hash-key sub-key1        # 从散列里面单独取出一个域。
+"value1"                                            #
 redis 127.0.0.1:6379> hgetall hash-key
 1) "sub-key1"
 2) "value1"
-# <end id="simple-hash-calls"/>
-#A When we add items to a hash, again we get a return value that tells us whether the item is new in the hash
-#B We can fetch all of the items in the HASH, which gets translated into a dictionary on the Python side of things
-#C When we delete items from the hash, the command returns whether the item was there before we tried to remove it
-#D We can also fetch individual fields from hashes
-#END
 '''
 
 
+# 代码清单 1-5 
 '''
-# <start id="simple-zset-calls"/>
-redis 127.0.0.1:6379> zadd zset-key 728 member1     #A
-(integer) 1                                         #A
-redis 127.0.0.1:6379> zadd zset-key 982 member0     #A
-(integer) 1                                         #A
-redis 127.0.0.1:6379> zadd zset-key 982 member0     #A
-(integer) 0                                         #A
-redis 127.0.0.1:6379> zrange zset-key 0 -1 withscores   #B
-1) "member1"                                            #B
-2) "728"                                                #B
-3) "member0"                                            #B
-4) "982"                                                #B
-redis 127.0.0.1:6379> zrangebyscore zset-key 0 800 withscores   #C
-1) "member1"                                                    #C
-2) "728"                                                        #C
-redis 127.0.0.1:6379> zrem zset-key member1     #D
-(integer) 1                                     #D
-redis 127.0.0.1:6379> zrem zset-key member1     #D
-(integer) 0                                     #D
+redis 127.0.0.1:6379> zadd zset-key 728 member1     # 在尝试向有序集合添加元素的时候，
+(integer) 1                                         # 命令会返回新添加元素的数量。
+redis 127.0.0.1:6379> zadd zset-key 982 member0     #
+(integer) 1                                         #
+redis 127.0.0.1:6379> zadd zset-key 982 member0     #
+(integer) 0                                         #
+redis 127.0.0.1:6379> zrange zset-key 0 -1 withscores   # 获取有序集合包含的所有元素，
+1) "member1"                                            # 这些元素会按照分值进行排序，
+2) "728"                                                # Python客户端会将这些分值转换成浮点数。
+3) "member0"                                            #
+4) "982"                                                #
+redis 127.0.0.1:6379> zrangebyscore zset-key 0 800 withscores   # 也可以根据分值来获取有序集合的其中一部分元素。
+1) "member1"                                                    #
+2) "728"                                                        #
+redis 127.0.0.1:6379> zrem zset-key member1     # 在移除有序集合元素的时候，
+(integer) 1                                     # 命令会返回被移除元素的数量。
+redis 127.0.0.1:6379> zrem zset-key member1     #
+(integer) 0                                     #
 redis 127.0.0.1:6379> zrange zset-key 0 -1 withscores
 1) "member0"
 2) "982"
-# <end id="simple-zset-calls"/>
-#A When we add items to a ZSET, the the command returns the number of new items
-#B We can fetch all of the items in the ZSET, which are ordered by the scores, and scores are turned into floats in Python
-#C We can also fetch a subsequence of items based on their scores
-#D When we remove items, we again find the number of items that were removed
-#END
 '''
 
+
+# 代码清单 1-6
 # <start id="upvote-code"/>
-ONE_WEEK_IN_SECONDS = 7 * 86400                     #A
-VOTE_SCORE = 432                                    #A
+# 准备好需要用到的常量。
+ONE_WEEK_IN_SECONDS = 7 * 86400
+VOTE_SCORE = 432
 
 def article_vote(conn, user, article):
-    cutoff = time.time() - ONE_WEEK_IN_SECONDS      #B
-    if conn.zscore('time:', article) < cutoff:      #C
+
+    # 计算文章的投票截止时间。
+    cutoff = time.time() - ONE_WEEK_IN_SECONDS
+
+    # 检查是否还可以对文章进行投票
+    #（虽然使用散列也可以获取文章的发布时间，
+    # 但有序集合返回的文章发布时间为浮点数，
+    # 可以不进行转换直接使用）。
+    if conn.zscore('time:', article) < cutoff:
         return
 
-    article_id = article.partition(':')[-1]         #D
-    if conn.sadd('voted:' + article_id, user):      #E
-        conn.zincrby('score:', article, VOTE_SCORE) #E
-        conn.hincrby(article, 'votes', 1)           #E
-# <end id="upvote-code"/>
-#A Prepare our constants
-#B Calculate the cutoff time for voting
-#C Check to see if the article can still be voted on (we could use the article HASH here, but scores are returned as floats so we don't have to cast it)
-#D Get the id portion from the article:id identifier
-#E If the user hasn't voted for this article before, increment the article score and vote count (note that our HINCRBY and ZINCRBY calls should be in a Redis transaction, but we don't introduce them until chapter 3 and 4, so ignore that for now)
-#END
+    # 从article:id标识符（identifier）里面取出文章的ID。
+    article_id = article.partition(':')[-1]
 
+    # 如果用户是第一次为这篇文章投票，那么增加这篇文章的投票数量和评分。
+    if conn.sadd('voted:' + article_id, user):
+        conn.zincrby('score:', article, VOTE_SCORE)
+        conn.hincrby(article, 'votes', 1)
+# <end id="upvote-code"/>
+
+
+# 代码清单 1-7
 # <start id="post-article-code"/>
 def post_article(conn, user, title, link):
-    article_id = str(conn.incr('article:'))     #A
+    # 生成一个新的文章ID。
+    article_id = str(conn.incr('article:'))
 
     voted = 'voted:' + article_id
-    conn.sadd(voted, user)                      #B
-    conn.expire(voted, ONE_WEEK_IN_SECONDS)     #B
+    # 将发布文章的用户添加到文章的已投票用户名单里面，
+    # 然后将这个名单的过期时间设置为一周（第3章将对过期时间作更详细的介绍）。
+    conn.sadd(voted, user)
+    conn.expire(voted, ONE_WEEK_IN_SECONDS)
 
     now = time.time()
     article = 'article:' + article_id
-    conn.hmset(article, {                       #C
-        'title': title,                         #C
-        'link': link,                           #C
-        'poster': user,                         #C
-        'time': now,                            #C
-        'votes': 1,                             #C
-    })                                          #C
+    # 将文章信息存储到一个散列里面。
+    conn.hmset(article, {
+        'title': title,
+        'link': link,
+        'poster': user,
+        'time': now,
+        'votes': 1,
+    })
 
-    conn.zadd('score:', article, now + VOTE_SCORE)  #D
-    conn.zadd('time:', article, now)                #D
+    # 将文章添加到根据发布时间排序的有序集合和根据评分排序的有序集合里面。
+    conn.zadd('score:', article, now + VOTE_SCORE)
+    conn.zadd('time:', article, now) 
 
     return article_id
 # <end id="post-article-code"/>
-#A Generate a new article id
-#B Start with the posting user having voted for the article, and set the article voting information to automatically expire in a week (we discuss expiration in chapter 3)
-#C Create the article hash
-#D Add the article to the time and score ordered zsets
-#END
 
+
+# 代码清单 1-8
 # <start id="fetch-articles-code"/>
 ARTICLES_PER_PAGE = 25
 
 def get_articles(conn, page, order='score:'):
-    start = (page-1) * ARTICLES_PER_PAGE            #A
-    end = start + ARTICLES_PER_PAGE - 1             #A
+    # 设置获取文章的起始索引和结束索引。
+    start = (page-1) * ARTICLES_PER_PAGE
+    end = start + ARTICLES_PER_PAGE - 1
 
-    ids = conn.zrevrange(order, start, end)         #B
+    # 获取多个文章ID。
+    ids = conn.zrevrange(order, start, end)
     articles = []
-    for id in ids:                                  #C
-        article_data = conn.hgetall(id)             #C
-        article_data['id'] = id                     #C
-        articles.append(article_data)               #C
+    # 根据文章ID获取文章的详细信息。
+    for id in ids:
+        article_data = conn.hgetall(id)
+        article_data['id'] = id
+        articles.append(article_data)
 
     return articles
 # <end id="fetch-articles-code"/>
-#A Set up the start and end indexes for fetching the articles
-#B Fetch the article ids
-#C Get the article information from the list of article ids
-#END
 
+
+# 代码清单 1-9
 # <start id="add-remove-groups"/>
 def add_remove_groups(conn, article_id, to_add=[], to_remove=[]):
-    article = 'article:' + article_id           #A
+    # 构建存储文章信息的键名。
+    article = 'article:' + article_id
     for group in to_add:
-        conn.sadd('group:' + group, article)    #B
+        # 将文章添加到它所属的群组里面。
+        conn.sadd('group:' + group, article)
     for group in to_remove:
-        conn.srem('group:' + group, article)    #C
+        # 从群组里面移除文章。
+        conn.srem('group:' + group, article)
 # <end id="add-remove-groups"/>
-#A Construct the article information like we did in post_article
-#B Add the article to groups that it should be a part of
-#C Remove the article from groups that it should be removed from
-#END
 
+
+# 代码清单 1-10
 # <start id="fetch-articles-group"/>
 def get_group_articles(conn, group, page, order='score:'):
-    key = order + group                                     #A
-    if not conn.exists(key):                                #B
-        conn.zinterstore(key,                               #C
-            ['group:' + group, order],                      #C
-            aggregate='max',                                #C
+    # 为每个群组的每种排列顺序都创建一个键。
+    key = order + group
+    # 检查是否有已缓存的排序结果，如果没有的话就现在进行排序。
+    if not conn.exists(key): 
+        # 根据评分或者发布时间，对群组文章进行排序。
+        conn.zinterstore(key,
+            ['group:' + group, order],
+            aggregate='max',
         )
-        conn.expire(key, 60)                                #D
-    return get_articles(conn, page, key)                    #E
+        # 让Redis在60秒钟之后自动删除这个有序集合。
+        conn.expire(key, 60)
+    # 调用之前定义的get_articles()函数来进行分页并获取文章数据。
+    return get_articles(conn, page, key)
 # <end id="fetch-articles-group"/>
-#A Create a key for each group and each sort order
-#B If we haven't sorted these articles recently, we should sort them
-#C Actually sort the articles in the group based on score or recency
-#D Tell Redis to automatically expire the ZSET in 60 seconds
-#E Call our earlier get_articles() function to handle pagination and article data fetching
-#END
 
-#--------------- Below this line are helpers to test the code ----------------
+#--------------- 以下是用于测试代码的辅助函数 --------------------------------
 
 class TestCh01(unittest.TestCase):
     def setUp(self):
