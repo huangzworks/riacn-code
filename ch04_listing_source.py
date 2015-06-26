@@ -1,3 +1,4 @@
+# coding: utf-8
 
 import os
 import time
@@ -6,124 +7,133 @@ import uuid
 
 import redis
 
+
+# 代码清单 4-1
 '''
 # <start id="persistence-options"/>
-save 60 1000                        #A
-stop-writes-on-bgsave-error no      #A
-rdbcompression yes                  #A
-dbfilename dump.rdb                 #A
+save 60 1000                        # 快照持久化选项。
+stop-writes-on-bgsave-error no      #
+rdbcompression yes                  #
+dbfilename dump.rdb                 #
 
-appendonly no                       #B
-appendfsync everysec                #B
-no-appendfsync-on-rewrite no        #B
-auto-aof-rewrite-percentage 100     #B
-auto-aof-rewrite-min-size 64mb      #B
+appendonly no                       # 只追加文件持久化选项。
+appendfsync everysec                #
+no-appendfsync-on-rewrite no        #
+auto-aof-rewrite-percentage 100     #
+auto-aof-rewrite-min-size 64mb      #
 
-dir ./                              #C
-# <end id="persistence-options"/>
-#A Snapshotting persistence options
-#B Append-only file persistence options
-#C Shared option, where to store the snapshot or append-only file
-#END
+dir ./                              # 共享选项，这个选项决定了快照文件和只追加文件的保存位置。
 '''
 
+
+# 代码清单 4-2
 # <start id="process-logs-progress"/>
-def process_logs(conn, path, callback):                     #K
-    current_file, offset = conn.mget(                       #A
-        'progress:file', 'progress:position')               #A
+# 日志处理函数接受的其中一个参数为回调函数，
+# 这个回调函数接受一个Redis连接和一个日志行作为参数，
+# 并通过调用流水线对象的方法来执行Redis命令。
+def process_logs(conn, path, callback):
+    # 获取文件当前的处理进度。
+    current_file, offset = conn.mget( 
+        'progress:file', 'progress:position') 
 
     pipe = conn.pipeline()
 
-    def update_progress():                                  #H
-        pipe.mset({                                         #I
-            'progress:file': fname,                         #I
-            'progress:position': offset                     #I
+    # 通过使用闭包（closure）来减少重复代码
+    def update_progress():    
+        # 更新正在处理的日志文件的名字和偏移量。
+        pipe.mset({
+            'progress:file': fname,
+            'progress:position': offset 
         })
-        pipe.execute()                                      #J
+        # 这个语句负责执行实际的日志更新操作，
+        # 并将日志文件的名字和目前的处理进度记录到Redis里面。
+        pipe.execute()
 
-    for fname in sorted(os.listdir(path)):                  #B
-        if fname < current_file:                            #C
+    # 有序地遍历各个日志文件。
+    for fname in sorted(os.listdir(path)): 
+        # 略过所有已处理的日志文件。
+        if fname < current_file:
             continue
 
         inp = open(os.path.join(path, fname), 'rb')
-        if fname == current_file:                           #D
-            inp.seek(int(offset, 10))                       #D
+        # 在接着处理一个因为系统崩溃而未能完成处理的日志文件时，略过已处理的内容。
+        if fname == current_file:
+            inp.seek(int(offset, 10)) 
         else:
             offset = 0
 
         current_file = None
 
-        for lno, line in enumerate(inp):                    #L
-            callback(pipe, line)                            #E
-            offset += int(offset) + len(line)               #F
+        # 枚举函数遍历一个由文件行组成的序列，
+        # 并返回任意多个二元组，
+        # 每个二元组包含了行号lno和行数据line，
+        # 其中行号从0开始。
+        for lno, line in enumerate(inp):
+            # 处理日志行。
+            callback(pipe, line)
+            # 更新已处理内容的偏移量。
+            offset += int(offset) + len(line) 
 
-            if not (lno+1) % 1000:                          #G
-                update_progress()                           #G
-        update_progress()                                   #G
+            # 每当处理完1000个日志行或者处理完整个日志文件的时候，
+            # 都更新一次文件的处理进度。
+            if not (lno+1) % 1000: 
+                update_progress()
+
+        update_progress()
 
         inp.close()
 # <end id="process-logs-progress"/>
-#A Get the current progress
-#B Iterate over the logfiles in sorted order
-#C Skip over files that are before the current file
-#D If we are continuing a file, skip over the parts that we've already processed
-#E Handle the log line
-#F Update our information about the offset into the file
-#G Write our progress back to Redis every 1000 lines, or when we are done with a file
-#H This closure is meant primarily to reduce the number of duplicated lines later
-#I We want to update our file and line number offsets into the logfile
-#J This will execute any outstanding log updates, as well as to actually write our file and line number updates to Redis
-#K Our function will be provided with a callback that will take a connection and a log line, calling methods on the pipeline as necessary
-#L The enumerate function iterates over a sequence (in this case lines from a file), and produces pairs consisting of a numeric sequence starting from 0, and the original data
-#END
 
+
+# 代码清单 4-3
 # <start id="wait-for-sync"/>
 def wait_for_sync(mconn, sconn):
     identifier = str(uuid.uuid4())
-    mconn.zadd('sync:wait', identifier, time.time())        #A
+    # 将令牌添加至主服务器。
+    mconn.zadd('sync:wait', identifier, time.time()) 
 
-    while not sconn.info()['master_link_status'] != 'up':   #B
+    # 如果有必要的话，等待从服务器完成同步。
+    while not sconn.info()['master_link_status'] != 'up': 
         time.sleep(.001)
 
-    while not sconn.zscore('sync:wait', identifier):        #C
+    # 等待从服务器接收数据更新。
+    while not sconn.zscore('sync:wait', identifier): 
         time.sleep(.001)
 
-    deadline = time.time() + 1.01                           #D
-    while time.time() < deadline:                           #D
-        if sconn.info()['aof_pending_bio_fsync'] == 0:      #E
-            break                                           #E
+    # 最多只等待一秒钟。
+    deadline = time.time() + 1.01  
+    while time.time() < deadline: 
+        # 检查数据更新是否已经被同步到了磁盘。
+        if sconn.info()['aof_pending_bio_fsync'] == 0:
+            break
         time.sleep(.001)
 
-    mconn.zrem('sync:wait', identifier)                     #F
-    mconn.zremrangebyscore('sync:wait', 0, time.time()-900) #F
+    # 清理刚刚创建的新令牌以及之前可能留下的旧令牌。
+    mconn.zrem('sync:wait', identifier)
+    mconn.zremrangebyscore('sync:wait', 0, time.time()-900) 
 # <end id="wait-for-sync"/>
-#A Add the token to the master
-#B Wait for the slave to sync (if necessary)
-#C Wait for the slave to receive the data change
-#D Wait up to 1 second
-#E Check to see if the data is known to be on disk
-#F Clean up our status and clean out older entries that may have been left there
-#END
 
+
+# 代码清单 4-4
 '''
 # <start id="master-failover"/>
-user@vpn-master ~:$ ssh root@machine-b.vpn                          #A
-Last login: Wed Mar 28 15:21:06 2012 from ...                       #A
-root@machine-b ~:$ redis-cli                                        #B
-redis 127.0.0.1:6379> SAVE                                          #C
-OK                                                                  #C
-redis 127.0.0.1:6379> QUIT                                          #C
-root@machine-b ~:$ scp \\                                           #D
-> /var/local/redis/dump.rdb machine-c.vpn:/var/local/redis/         #D
-dump.rdb                      100%   525MB  8.1MB/s   01:05         #D
-root@machine-b ~:$ ssh machine-c.vpn                                #E
-Last login: Tue Mar 27 12:42:31 2012 from ...                       #E
-root@machine-c ~:$ sudo /etc/init.d/redis-server start              #E
-Starting Redis server...                                            #E
+user@vpn-master ~:$ ssh root@machine-b.vpn                          # 通过VPN网络连接机器B。
+Last login: Wed Mar 28 15:21:06 2012 from ...                       #
+root@machine-b ~:$ redis-cli                                        # 启动命令行Redis客户端来执行几个简单的操作。
+redis 127.0.0.1:6379> SAVE                                          # 执行SAVE命令，
+OK                                                                  # 并在命令完成之后，
+redis 127.0.0.1:6379> QUIT                                          # 使用QUIT命令退出客户端。
+root@machine-b ~:$ scp \\                                           # 将快照文件发送至新的主服务器——机器C。
+> /var/local/redis/dump.rdb machine-c.vpn:/var/local/redis/         #
+dump.rdb                      100%   525MB  8.1MB/s   01:05         #
+root@machine-b ~:$ ssh machine-c.vpn                                # 连接新的主服务器并启动Redis。
+Last login: Tue Mar 27 12:42:31 2012 from ...                       #
+root@machine-c ~:$ sudo /etc/init.d/redis-server start              #
+Starting Redis server...                                            #
 root@machine-c ~:$ exit
-root@machine-b ~:$ redis-cli                                        #F
-redis 127.0.0.1:6379> SLAVEOF machine-c.vpn 6379                    #F
-OK                                                                  #F
+root@machine-b ~:$ redis-cli                                        # 告知机器B的Redis，让它将机器C用作新的主服务器。
+redis 127.0.0.1:6379> SLAVEOF machine-c.vpn 6379                    #
+OK                                                                  #
 redis 127.0.0.1:6379> QUIT
 root@machine-b ~:$ exit
 user@vpn-master ~:$
@@ -146,28 +156,32 @@ def list_item(conn, itemid, sellerid, price):
 
     while time.time() < end:
         try:
-            pipe.watch(inventory)                    #A
-            if not pipe.sismember(inventory, itemid):#B
-                pipe.unwatch()                       #E
+            # 监视用户包裹发生的变化。
+            pipe.watch(inventory)
+            # 验证用户是否仍然持有指定的物品。
+            if not pipe.sismember(inventory, itemid):
+                # 如果指定的物品不在用户的包裹里面，
+                # 那么停止对包裹键的监视并返回一个空值。
+                pipe.unwatch() 
                 return None
 
-            pipe.multi()                             #C
-            pipe.zadd("market:", item, price)        #C
-            pipe.srem(inventory, itemid)             #C
-            pipe.execute()                           #F
+            # 将指定的物品添加到物品买卖市场里面。
+            pipe.multi()
+            pipe.zadd("market:", item, price) 
+            pipe.srem(inventory, itemid)
+            # 如果执行execute方法没有引发WatchError异常，
+            # 那么说明事务执行成功，
+            # 并且对包裹键的监视也已经结束。
+            pipe.execute()   
             return True
-        except redis.exceptions.WatchError:          #D
-            pass                                     #D
+        # 用户的包裹已经发生了变化；重试。
+        except redis.exceptions.WatchError: 
+            pass
     return False
 # <end id="_1313_14472_8342"/>
-#A Watch for changes to the users's inventory
-#B Verify that the user still has the item to be listed
-#E If the item is not in the user's inventory, stop watching the inventory key and return
-#C Actually list the item
-#F If execute returns without a WatchError being raised, then the transaction is complete and the inventory key is no longer watched
-#D The user's inventory was changed, retry
-#END
 
+
+# 代码清单 4-6
 # <start id="_1313_14472_8353"/>
 def purchase_item(conn, buyerid, itemid, sellerid, lprice):
     buyer = "users:%s"%buyerid
@@ -179,54 +193,57 @@ def purchase_item(conn, buyerid, itemid, sellerid, lprice):
 
     while time.time() < end:
         try:
-            pipe.watch("market:", buyer)                #A
+            # 对物品买卖市场以及买家账号信息的变化进行监视。
+            pipe.watch("market:", buyer)
 
-            price = pipe.zscore("market:", item)        #B
-            funds = int(pipe.hget(buyer, "funds"))      #B
-            if price != lprice or price > funds:        #B
-                pipe.unwatch()                          #B
+            # 检查指定物品的价格是否出现了变化，
+            # 以及买家是否有足够的钱来购买指定的物品。
+            price = pipe.zscore("market:", item) 
+            funds = int(pipe.hget(buyer, "funds"))  
+            if price != lprice or price > funds:  
+                pipe.unwatch()   
                 return None
 
-            pipe.multi()                                #C
-            pipe.hincrby(seller, "funds", int(price))   #C
-            pipe.hincrby(buyer, "funds", int(-price))   #C
-            pipe.sadd(inventory, itemid)                #C
-            pipe.zrem("market:", item)                  #C
-            pipe.execute()                              #C
+            # 将买家支付的货款转移给卖家，并将卖家出售的物品移交给买家。
+            pipe.multi()
+            pipe.hincrby(seller, "funds", int(price)) 
+            pipe.hincrby(buyer, "funds", int(-price)) 
+            pipe.sadd(inventory, itemid)  
+            pipe.zrem("market:", item)  
+            pipe.execute()      
             return True
-        except redis.exceptions.WatchError:             #D
-            pass                                        #D
+        # 如果买家的账号或者物品买卖市场出现了变化，那么进行重试。
+        except redis.exceptions.WatchError:
+            pass
 
     return False
 # <end id="_1313_14472_8353"/>
-#A Watch for changes to the market and to the buyer's account information
-#B Check for a sold/repriced item or insufficient funds
-#C Transfer funds from the buyer to the seller, and transfer the item to the buyer
-#D Retry if the buyer's account or the market changed
-#END
 
 
+# 代码清单 4-7
 # <start id="update-token"/>
 def update_token(conn, token, user, item=None):
-    timestamp = time.time()                             #A
-    conn.hset('login:', token, user)                    #B
-    conn.zadd('recent:', token, timestamp)              #C
+    # 获取时间戳。
+    timestamp = time.time()
+    # 创建令牌与已登录用户之间的映射。
+    conn.hset('login:', token, user)
+    # 记录令牌最后一次出现的时间。
+    conn.zadd('recent:', token, timestamp)
     if item:
-        conn.zadd('viewed:' + token, item, timestamp)   #D
-        conn.zremrangebyrank('viewed:' + token, 0, -26) #E
-        conn.zincrby('viewed:', item, -1)               #F
+        # 把用户浏览过的商品记录起来。
+        conn.zadd('viewed:' + token, item, timestamp) 
+        # 移除旧商品，只记录最新浏览的25件商品。
+        conn.zremrangebyrank('viewed:' + token, 0, -26) 
+        # 更新给定商品的被浏览次数。
+        conn.zincrby('viewed:', item, -1) 
 # <end id="update-token"/>
-#A Get the timestamp
-#B Keep a mapping from the token to the logged-in user
-#C Record when the token was last seen
-#D Record that the user viewed the item
-#E Remove old items, keeping the most recent 25
-#F Update the number of times the given item had been viewed
-#END
 
+
+# 代码清单 4-8
 # <start id="update-token-pipeline"/>
 def update_token_pipeline(conn, token, user, item=None):
     timestamp = time.time()
+    # 设置流水线。
     pipe = conn.pipeline(False)                         #A
     pipe.hset('login:', token, user)
     pipe.zadd('recent:', token, timestamp)
@@ -234,35 +251,36 @@ def update_token_pipeline(conn, token, user, item=None):
         pipe.zadd('viewed:' + token, item, timestamp)
         pipe.zremrangebyrank('viewed:' + token, 0, -26)
         pipe.zincrby('viewed:', item, -1)
+    # 执行那些被流水线包裹的命令。
     pipe.execute()                                      #B
 # <end id="update-token-pipeline"/>
-#A Set up the pipeline
-#B Execute the commands in the pipeline
-#END
 
+
+# 代码清单 4-9
 # <start id="simple-pipeline-benchmark-code"/>
 def benchmark_update_token(conn, duration):
-    for function in (update_token, update_token_pipeline):      #A
+    # 测试会分别执行update_token()函数和update_token_pipeline()函数。
+    for function in (update_token, update_token_pipeline): 
+        # 设置计数器以及测试结束的条件。
         count = 0                                               #B
         start = time.time()                                     #B
         end = start + duration                                  #B
         while time.time() < end:
             count += 1
+            # 调用两个函数的其中一个。
             function(conn, 'token', 'user', 'item')             #C
+        # 计算函数的执行时长。
         delta = time.time() - start                             #D
+        # 打印测试结果。
         print function.__name__, count, delta, count / delta    #E
 # <end id="simple-pipeline-benchmark-code"/>
-#A Execute both the update_token() and the update_token_pipeline() functions
-#B Set up our counters and our ending conditions
-#C Call one of the two functions
-#D Calculate the duration
-#E Print information about the results
-#END
 
+
+# 代码清单 4-10
 '''
 # <start id="redis-benchmark"/>
-$ redis-benchmark  -c 1 -q                               #A
-PING (inline): 34246.57 requests per second
+$ redis-benchmark  -c 1 -q                               # 给定“-q”选项可以让程序简化输出结果，
+PING (inline): 34246.57 requests per second              # 给定“-c 1”选项让程序只使用一个客户端来进行测试。
 PING: 34843.21 requests per second
 MSET (10 keys): 24213.08 requests per second
 SET: 32467.53 requests per second
@@ -282,7 +300,7 @@ LRANGE (first 600 elements): 9041.59 requests per second
 #END
 '''
 
-#--------------- Below this line are helpers to test the code ----------------
+#--------------- 以下是用于测试代码的辅助函数 --------------------------------
 
 class TestCh04(unittest.TestCase):
     def setUp(self):
