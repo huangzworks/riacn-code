@@ -1,3 +1,4 @@
+# coding: utf-8
 
 import binascii
 from collections import defaultdict
@@ -146,32 +147,34 @@ def shard_sadd(conn, base, member, total_elements, shard_size):
 SHARD_SIZE = 512
 EXPECTED = defaultdict(lambda: 1000000)
 
+
+# 代码清单 10-1
 # <start id="get-connection"/>
 def get_redis_connection(component, wait=1):
     key = 'config:redis:' + component
-    old_config = CONFIGS.get(key, object())             #A
-    config = get_config(                                #B
-        config_connection, 'redis', component, wait)    #B
+    # 尝试获取旧的配置。
+    old_config = CONFIGS.get(key, object())           
+    # 尝试获取新的配置。
+    config = get_config(                                
+        config_connection, 'redis', component, wait)    
 
-    if config != old_config:                            #C
-        REDIS_CONNECTIONS[key] = redis.Redis(**config)  #C
+    # 如果新旧配置不相同，那么创建一个新的连接。
+    if config != old_config:                            
+        REDIS_CONNECTIONS[key] = redis.Redis(**config)  
 
-    return REDIS_CONNECTIONS.get(key)                   #D
+    # 返回用户指定的连接对象。
+    return REDIS_CONNECTIONS.get(key)                  
 # <end id="get-connection"/>
-#A Fetch the old configuration, if any
-#B Get the new configuration, if any
-#C If the new and old configuration do not match, create a new connection
-#D Return the desired connection object
-#END
 
+
+# 代码清单 10-2
 # <start id="get-sharded-connection"/>
 def get_sharded_connection(component, key, shard_count, wait=1):
-    shard = shard_key(component, 'x'+str(key), shard_count, 2)  #A
-    return get_redis_connection(shard, wait)                    #B
+    # 计算出 “<组件名>:<分片数字>” 格式的分片 ID 。
+    shard = shard_key(component, 'x'+str(key), shard_count, 2)  
+    # 返回连接。
+    return get_redis_connection(shard, wait)                   
 # <end id="get-sharded-connection"/>
-#A Calculate the shard id of the form: &lt;component&gt;:&lt;shard&gt;
-#B Return the connection
-#END
 
 
 # <start id="no-decorator-example"/>
@@ -183,100 +186,109 @@ log_recent = redis_connection('logs')(log_recent)   #A
 #A This performs the equivalent decoration, but requires repeating the 'log_recent' function name 3 times
 #END
 
+# 代码清单 10-3
 # <start id="shard-aware-decorator"/>
-def sharded_connection(component, shard_count, wait=1):         #A
-    def wrapper(function):                                      #B
-        @functools.wraps(function)                              #C
-        def call(key, *args, **kwargs):                         #D
-            conn = get_sharded_connection(                      #E
-                component, key, shard_count, wait)              #E
-            return function(conn, key, *args, **kwargs)         #F
-        return call                                             #G
-    return wrapper                                              #H
+# 装饰器接受组件名以及预期的分片数量作为参数。
+def sharded_connection(component, shard_count, wait=1):        
+    # 创建一个包装器，使用它去装饰传入的函数。
+    def wrapper(function):                                     
+        # 从原始函数里面复制一些有用的元信息到配置处理器。
+        @functools.wraps(function)                            
+        # 创建一个函数，它负责计算键的分片 ID ，并对连接管理器进行设置。
+        def call(key, *args, **kwargs):                        
+            # 获取分片连接。
+            conn = get_sharded_connection(                     
+                component, key, shard_count, wait)            
+            # 实际地调用被装饰的函数，并将分片连接以及其他参数传递给它。
+            return function(conn, key, *args, **kwargs)        
+        # 返回被包装后的函数。
+        return call                                             
+    # 返回一个函数，它可以对需要分片连接的函数进行包装。
+    return wrapper                                             
 # <end id="shard-aware-decorator"/>
-#A Our decorator is going to take a component name, as well as the number of shards desired
-#B We are then going to create a wrapper that will actually decorate the function
-#C Copy some useful metadata from the original function to the configuration handler
-#D Create the function that will calculate a shard id for keys, and set up the connection manager
-#E Fetch the sharded connection
-#F Actually call the function, passing the connection and existing arguments
-#G Return the fully wrapped function
-#H Return a function that can wrap functions that need a sharded connection
-#END
 
+
+# 代码清单 10-4
 # <start id="sharded-count-unique"/>
-@sharded_connection('unique', 16)                       #A
+# 将 count_visit() 函数分片到 16 台机器上面执行，
+# 执行所得的结果将被自动地分片到每台机器的多个数据库键上面。
+@sharded_connection('unique', 16)                      
 def count_visit(conn, session_id):
     today = date.today()
     key = 'unique:%s'%today.isoformat()
-    conn2, expected = get_expected(key, today)          #B
+    # 经过修改的 get_expected() 调用。
+    conn2, expected = get_expected(key, today)        
 
     id = int(session_id.replace('-', '')[:15], 16)
     if shard_sadd(conn, key, id, expected, SHARD_SIZE):
-        conn2.incr(key)                                 #C
+        # 使用 get_expected() 函数返回的非分片（nonsharded）连接，
+        # 对唯一计数器执行自增操作。
+        conn2.incr(key)                               
 
-@redis_connection('unique')                             #D
+# 对 get_expected() 函数使用非分片连接。
+@redis_connection('unique')                            
 def get_expected(conn, key, today):
     'all of the same function body as before, except the last line'
-    return conn, EXPECTED[key]                          #E
+    # 返回非分片连接，
+    # 使得 count_visit() 函数可以在有需要的时候，
+    # 对唯一计数器执行自增操作。
+    return conn, EXPECTED[key]                        
 # <end id="sharded-count-unique"/>
-#A We are going to shard this to 16 different machines, which will automatically shard to multiple keys on each machine
-#B Our changed call to get_expected()
-#C Use the returned non-sharded connection to increment our unique counts
-#D Use a non-sharded connection to get_expected()
-#E Also return the non-sharded connection so that count_visit() can increment our unique count as necessary
-#END
 
+
+# 代码清单 10-5
 # <start id="search-with-values"/>
-def search_get_values(conn, query, id=None, ttl=300, sort="-updated", #A
-                      start=0, num=20):                               #A
-    count, docids, id = search_and_sort(                            #B
-        conn, query, id, ttl, sort, 0, start+num)                   #B
+# 这个函数接受的参数与 search_and_sort() 函数接受的参数完全相同。
+def search_get_values(conn, query, id=None, ttl=300, sort="-updated", 
+                      start=0, num=20):                               
+    # 首先取得搜索操作和排序操作的执行结果。
+    count, docids, id = search_and_sort(                           
+        conn, query, id, ttl, sort, 0, start+num)                  
 
     key = "kb:doc:%s"
     sort = sort.lstrip('-')
 
     pipe = conn.pipeline(False)
-    for docid in docids:                                            #C
-        pipe.hget(key%docid, sort)                                  #C
-    sort_column = pipe.execute()                                    #C
+    # 根据结果的排序方式来获取数据。
+    for docid in docids:                                           
+        pipe.hget(key%docid, sort)                                 
+    sort_column = pipe.execute()                                   
 
-    data_pairs = zip(docids, sort_column)                           #D
-    return count, data_pairs, id                                    #E
+    # 将文档 ID 以及对文档进行排序产生的数据进行配对（pair up）。
+    data_pairs = zip(docids, sort_column)                          
+    # 返回结果包含的文档数量、排序之后的搜索结果以及结果的缓存 ID 。
+    return count, data_pairs, id                                   
 # <end id="search-with-values"/>
-#A We need to take all of the same parameters to pass on to search_and_sort()
-#B First get the results of a search and sort
-#C Fetch the data that the results were sorted by
-#D Pair up the document ids with the data that it was sorted by
-#E Return the count, data, and cache id of the results
-#END
 
+
+# 代码清单 10-6
 # <start id="search-on-shards"/>
-def get_shard_results(component, shards, query, ids=None, ttl=300,  #A
-                  sort="-updated", start=0, num=20, wait=1):        #A
+# 程序为了获知自己要连接的服务器，
+# 会假定所有分片服务器的信息都记录在一个标准的配置位置里面。
+def get_shard_results(component, shards, query, ids=None, ttl=300,  
+                  sort="-updated", start=0, num=20, wait=1):        
 
-    count = 0       #B
-    data = []       #B
-    ids = ids or shards * [None]       #C
+    # 准备一些结构，用于储存之后获取的数据。
+    count = 0      
+    data = []      
+    # 尝试使用已被缓存的搜索结果；
+    # 如果没有缓存结果可用，那么重新执行查询。
+    ids = ids or shards * [None]       
     for shard in xrange(shards):
-        conn = get_redis_connection('%s:%s'%(component, shard), wait)#D
-        c, d, i = search_get_values(                        #E
-            conn, query, ids[shard], ttl, sort, start, num) #E
+        # 获取或者创建一个连向指定分片的连接。
+        conn = get_redis_connection('%s:%s'%(component, shard), wait)
+        # 获取搜索结果以及它们的排序数据。
+        c, d, i = search_get_values(                        
+            conn, query, ids[shard], ttl, sort, start, num) 
 
-        count += c          #F
-        data.extend(d)      #F
-        ids[shard] = i      #F
+        # 将这个分片的计算结果与其他分片的计算结果进行合并。
+        count += c          
+        data.extend(d)     
+        ids[shard] = i      
 
-    return count, data, ids     #G
+    # 把所有分片的原始（raw）计算结果返回给调用者。
+    return count, data, ids    
 # <end id="search-on-shards"/>
-#A In order to know what servers to connect to, we are going to assume that all of our shard information is kept in the standard configuration location
-#B Prepare structures to hold all of our fetched data
-#C Use cached results if we have any, otherwise start over
-#D Get or create a connection to the desired shard
-#E Fetch the search results and their sort values
-#F Combine this shard's results with all of the other results
-#G Return the raw results from all of the shards
-#END
 
 def get_values_thread(component, shard, wait, rqueue, *args, **kwargs):
     conn = get_redis_connection('%s:%s'%(component, shard), wait)
@@ -312,120 +324,137 @@ def get_shard_results_thread(component, shards, query, ids=None, ttl=300,
 
     return count, data, ids
 
+
+# 代码清单 10-7
 # <start id="merge-sharded-results"/>
 def to_numeric_key(data):
     try:
-        return Decimal(data[1] or '0')      #A
+        # 这里之所以使用 Decimal 数字类型，
+        # 是因为这种类型可以合理地对整数和浮点数进行转换，
+        # 并在值缺失或者不是数字值的时候，
+        # 返回默认值 0 。
+        return Decimal(data[1] or '0')     
     except:
-        return Decimal('0')                 #A
+        return Decimal('0')               
 
 def to_string_key(data):
-    return data[1] or ''                    #B
+    # 总是返回一个字符串，即使在值缺失的情况下，也是如此。
+    return data[1] or ''                   
 
-def search_shards(component, shards, query, ids=None, ttl=300,      #C
-                  sort="-updated", start=0, num=20, wait=1):        #C
+# 这个函数需要接受所有分片参数和搜索参数，
+# 这些参数大部分都会被传给底层的函数，
+# 而这个函数本身只会用到 sort 参数以及搜索偏移量。
+def search_shards(component, shards, query, ids=None, ttl=300,     
+                  sort="-updated", start=0, num=20, wait=1):       
 
-    count, data, ids = get_shard_results(                           #D
-        component, shards, query, ids, ttl, sort, start, num, wait) #D
+    # 获取未经排序的分片搜索结果。
+    count, data, ids = get_shard_results(                           
+        component, shards, query, ids, ttl, sort, start, num, wait) 
 
-    reversed = sort.startswith('-')                     #E
-    sort = sort.strip('-')                              #E
-    key = to_numeric_key                                #E
-    if sort not in ('updated', 'id', 'created'):        #E
-        key = to_string_key                             #E
+    # 准备好进行排序所需的各个参数。
+    reversed = sort.startswith('-')                    
+    sort = sort.strip('-')                             
+    key = to_numeric_key                               
+    if sort not in ('updated', 'id', 'created'):        
+        key = to_string_key                             
 
-    data.sort(key=key, reverse=reversed)               #F
+    # 根据 sort 参数对搜索结果进行排序。
+    data.sort(key=key, reverse=reversed)               
 
     results = []
-    for docid, score in data[start:start+num]:          #G
-        results.append(docid)                           #G
+    # 只获取用户指定的那一页搜索结果。
+    for docid, score in data[start:start+num]:         
+        results.append(docid)                          
 
-    return count, results, ids                          #H
+    # 返回被选中的结果，其中包括由每个分片的缓存 ID 组成的序列。
+    return count, results, ids                         
 # <end id="merge-sharded-results"/>
-#A We are going to use the 'Decimal' numeric type here because it transparently handles both integers and floats reasonably, defaulting to 0 if the value wasn't numeric or was missing
-#B Always return a string, even if there was no value stored
-#C We need to take all of the sharding and searching arguments, mostly to pass on to lower-level functions, but we use the sort and search offsets
-#D Fetch the results of the unsorted sharded search
-#E Prepare all of our sorting options
-#F Actually sort our results based on the sort parameter
-#G Fetch just the page of results that we want
-#H Return the results, including the sequence of cache ids for each shard
-#END
 
+
+# 代码清单 10-8
 # <start id="zset-search-with-values"/>
-def search_get_zset_values(conn, query, id=None, ttl=300, update=1, #A
-                    vote=0, start=0, num=20, desc=True):            #A
+# 这个函数接受 search_and_zsort() 函数所需的全部参数。
+def search_get_zset_values(conn, query, id=None, ttl=300, update=1, 
+                    vote=0, start=0, num=20, desc=True):            
 
-    count, r, id = search_and_zsort(                                #B
-        conn, query, id, ttl, update, vote, 0, 1, desc)             #B
+    # 调用底层的 search_and_zsort() 函数，
+    # 获取搜索结果的缓存 ID 以及结果包含的文档数量。
+    count, r, id = search_and_zsort(                                
+        conn, query, id, ttl, update, vote, 0, 1, desc)             
 
-    if desc:                                                        #C
-        data = conn.zrevrange(id, 0, start + num - 1, withscores=True)#C
-    else:                                                           #C
-        data = conn.zrange(id, 0, start + num - 1, withscores=True) #C
+    # 获取指定的搜索结果以及这些结果的分值。
+    if desc:                                                        
+        data = conn.zrevrange(id, 0, start + num - 1, withscores=True)
+    else:                                                          
+        data = conn.zrange(id, 0, start + num - 1, withscores=True) 
 
-    return count, data, id                                          #D
+    # 返回搜索结果的数量、搜索结果本身、搜索结果的分值以及搜索结果的缓存 ID 。
+    return count, data, id                                          
 # <end id="zset-search-with-values"/>
-#A We need to accept all of the standard arguments for search_and_zsort()
-#B Call the underlying search_and_zsort() function to get the cached result id and total number of results
-#C Fetch all of the results we need, including their scores
-#D Return the count, results with scores, and the cache id
-#END
 
+
+# 代码清单 10-9
 # <start id="search-shards-zset"/>
-def search_shards_zset(component, shards, query, ids=None, ttl=300,   #A
-                update=1, vote=0, start=0, num=20, desc=True, wait=1):#A
+# 函数需要接受所有分片参数以及所有搜索参数。
+def search_shards_zset(component, shards, query, ids=None, ttl=300,   
+                update=1, vote=0, start=0, num=20, desc=True, wait=1):
 
-    count = 0                       #B
-    data = []                       #B
-    ids = ids or shards * [None]    #C
+    # 准备一些结构，用于储存之后获取到的数据。
+    count = 0                       
+    data = []                       
+    # 尝试使用已有的缓存结果；
+    # 如果没有缓存结果可用，那么开始一次新的搜索。
+    ids = ids or shards * [None]    
     for shard in xrange(shards):
-        conn = get_redis_connection('%s:%s'%(component, shard), wait) #D
-        c, d, i = search_get_zset_values(conn, query, ids[shard],     #E
-            ttl, update, vote, start, num, desc)                      #E
+        # 获取或者创建指向每个分片的连接。
+        conn = get_redis_connection('%s:%s'%(component, shard), wait) 
+        # 在分片上面进行搜索，并取得搜索结果的分值。
+        c, d, i = search_get_zset_values(conn, query, ids[shard],     
+            ttl, update, vote, start, num, desc)                      
 
-        count += c      #F
-        data.extend(d)  #F
-        ids[shard] = i  #F
+        # 对每个分片的搜索结果进行合并。
+        count += c      
+        data.extend(d)  
+        ids[shard] = i  
 
-    def key(result):        #G
-        return result[1]    #G
+    # 定义一个简单的排序辅助函数，让它只返回与分值有关的信息。
+    def key(result):       
+        return result[1]   
 
-    data.sort(key=key, reversed=desc)   #H
+    # 对所有搜索结果进行排序。
+    data.sort(key=key, reversed=desc)   
     results = []
-    for docid, score in data[start:start+num]:  #I
-        results.append(docid)                   #I
+    # 从结果里面提取出文档 ID ，并丢弃与之关联的分值。
+    for docid, score in data[start:start+num]:  
+        results.append(docid)                  
 
-    return count, results, ids                  #J
+    # 将搜索结果返回给调用者。
+    return count, results, ids                  
 # <end id="search-shards-zset"/>
-#A We need to take all of the sharding arguments along with all of the search arguments
-#B Prepare structures for data to be returned
-#C Use cached results if any, otherwise start from scratch
-#D Fetch or create a connection to each shard
-#E Perform the search on a shard and fetch the scores
-#F Merge the results together
-#G Prepare the simple sort helper to only return information about the score
-#H Sort all of the results together
-#I Extract the document ids from the results, removing the scores
-#J Return the search results to the caller
-#END
 
+
+# 代码清单 10-11
 # <start id="sharded-api-base"/>
 class KeyShardedConnection(object):
-    def __init__(self, component, shards):          #A
-        self.component = component                  #A
-        self.shards = shards                        #A
-    def __getitem__(self, key):                     #B
-        return get_sharded_connection(              #C
-            self.component, key, self.shards)       #C
+    # 对象使用组件名字以及分片数量进行初始化。
+    def __init__(self, component, shards):        
+        self.component = component                 
+        self.shards = shards                      
+    # 当用户尝试从对象里面获取一个元素的时候，
+    # 这个方法就会被调用，
+    # 而调用这个方法时传入的参数就是用户请求的元素。
+    def __getitem__(self, key):                    
+        # 根据传入的键以及之前已知的组件名字和分片数量，
+        # 获取分片连接。
+        return get_sharded_connection(             
+            self.component, key, self.shards)     
 # <end id="sharded-api-base"/>
-#A The object is initialized with the component name and number of shards
-#B When an item is fetched from the object, this method is called with the item that was requested
-#C Use the passed key along with the previously-known component and shards to fetch the sharded connection
-#END
 
+
+# 代码清单 10-10
 # <start id="sharded-api-example"/>
-sharded_timelines = KeyShardedConnection('timelines', 8)    #A
+# 创建一个连接，这个连接包含对拥有指定分片数量的组件进行分片所需的相关信息。
+sharded_timelines = KeyShardedConnection('timelines', 8)   
 
 def follow_user(conn, uid, other_uid):
     fkey1 = 'following:%s'%uid
@@ -448,69 +477,80 @@ def follow_user(conn, uid, other_uid):
     pipeline.execute()
 
     pkey = 'profile:%s'%other_uid
-    status_and_score = sharded_timelines[pkey].zrevrange(   #B
-        pkey, 0, HOME_TIMELINE_SIZE-1, withscores=True)     #B
+    # 从正在关注的用户的个人时间线里面，取出最新的状态消息。
+    status_and_score = sharded_timelines[pkey].zrevrange(   
+        pkey, 0, HOME_TIMELINE_SIZE-1, withscores=True)     
 
     if status_and_score:
         hkey = 'home:%s'%uid
-        pipe = sharded_timelines[hkey].pipeline(True)       #C
-        pipe.zadd(hkey, **dict(status_and_score))           #D
-        pipe.zremrangebyrank(hkey, 0, -HOME_TIMELINE_SIZE-1)#D
-        pipe.execute()                                      #E
+        # 根据被分片的键获取一个连接，然后通过连接获取一个流水线对象。
+        pipe = sharded_timelines[hkey].pipeline(True)       
+        # 将一系列状态消息添加到位于分片上面的定制时间线有序集合里面，
+        # 并在添加操作完成之后，对有序集合进行修剪。
+        pipe.zadd(hkey, **dict(status_and_score))           
+        pipe.zremrangebyrank(hkey, 0, -HOME_TIMELINE_SIZE-1)
+        # 执行事务。
+        pipe.execute()                                      
 
     return True
 # <end id="sharded-api-example"/>
-#A Create a connection that knows about the sharding information for a given component with a number of shards
-#B Fetch the recent status messages from the profile timeline of the now-followed user
-#C Get a connection based on the shard key provided, and fetch a pipeline from that
-#D Add the statuses to the home timeline ZSET on the shard, then trim it
-#E Execute the transaction
-#END
 
 
+# 代码清单 10-13
 # <start id="key-data-sharded-api"/>
 class KeyDataShardedConnection(object):
-    def __init__(self, component, shards):          #A
-        self.component = component                  #A
-        self.shards = shards                        #A
-    def __getitem__(self, ids):                     #B
-        id1, id2 = map(int, ids)                    #C
-        if id2 < id1:                               #D
-            id1, id2 = id2, id1                     #D
-        key = "%s:%s"%(id1, id2)                    #E
-        return get_sharded_connection(              #F
-            self.component, key, self.shards)       #F
+    # 对象使用组件名和分片数量进行初始化。
+    def __init__(self, component, shards):         
+        self.component = component                 
+        self.shards = shards                       
+    # 当一对 ID 作为字典查找操作的其中一个参数被传入时，
+    # 这个方法将被调用。
+    def __getitem__(self, ids):                   
+        # 取出两个 ID ，并确保它们都是整数。
+        id1, id2 = map(int, ids)                   
+        # 如果第二个 ID 比第一个 ID 要小，
+        # 那么对调两个 ID 的位置，
+        # 从而确保第一个 ID 总是小于或等于第二个 ID 。
+        if id2 < id1:                              
+            id1, id2 = id2, id1                    
+        # 基于两个 ID 构建出一个键。
+        key = "%s:%s"%(id1, id2)                    
+        # 使用构建出的键以及之前已知的组件名和分片数量，
+        # 获取分片连接。
+        return get_sharded_connection(             
+            self.component, key, self.shards)       
 # <end id="key-data-sharded-api"/>
-#A The object is initialized with the component name and number of shards
-#B When the pair of ids are passed as part of the dictionary lookup, this method is called
-#C Unpack the pair of ids, and ensure that they are integers
-#D If the second is less than the first, swap them so that the first id is less than or equal to the second
-#E Construct a key based on the two ids
-#F Use the computed key along with the previously-known component and shards to fetch the sharded connection
-#END
+
 
 _follow_user = follow_user
+# 代码清单 10-12
 # <start id="sharded-api-example2"/>
-sharded_timelines = KeyShardedConnection('timelines', 8)        #A
-sharded_followers = KeyDataShardedConnection('followers', 16)   #A
+# 创建一个连接，
+# 这个连接包含对拥有指定分片数量的组件进行分片所需的相关信息。
+sharded_timelines = KeyShardedConnection('timelines', 8)        
+sharded_followers = KeyDataShardedConnection('followers', 16)   
 
 def follow_user(conn, uid, other_uid):
     fkey1 = 'following:%s'%uid
     fkey2 = 'followers:%s'%other_uid
 
-    sconn = sharded_followers[uid, other_uid]           #B
-    if sconn.zscore(fkey1, other_uid):                  #C
+    # 根据 uid 和 other_uid 获取连接对象。
+    sconn = sharded_followers[uid, other_uid]          
+    # 检查 other_uid 代表的用户是否已经关注了 uid 代表的用户。
+    if sconn.zscore(fkey1, other_uid):                 
         return None
 
     now = time.time()
     spipe = sconn.pipeline(True)
-    spipe.zadd(fkey1, other_uid, now)                   #D
-    spipe.zadd(fkey2, uid, now)                         #D
+    # 把关注者的信息以及被关注者的信息添加到有序集合里面。
+    spipe.zadd(fkey1, other_uid, now)                  
+    spipe.zadd(fkey2, uid, now)                        
     following, followers = spipe.execute()
 
     pipeline = conn.pipeline(True)
-    pipeline.hincrby('user:%s'%uid, 'following', int(following))      #E
-    pipeline.hincrby('user:%s'%other_uid, 'followers', int(followers))#E
+    # 为执行关注操作的用户以及被关注的用户更新关注者信息和正在关注信息。
+    pipeline.hincrby('user:%s'%uid, 'following', int(following))      
+    pipeline.hincrby('user:%s'%other_uid, 'followers', int(followers))
     pipeline.execute()
 
     pkey = 'profile:%s'%other_uid
@@ -526,34 +566,31 @@ def follow_user(conn, uid, other_uid):
 
     return True
 # <end id="sharded-api-example2"/>
-#A Create a connection that knows about the sharding information for a given component with a number of shards
-#B Fetch the connection object for the uid,other_uid pair
-#C Check to see if other_uid is already followed
-#D Add the follower/following information to the ZSETs
-#E Update the follower and following information for both users
-#END
 
+
+# 代码清单 10-14
 # <start id="sharded-zrangebyscore"/>
-def sharded_zrangebyscore(component, shards, key, min, max, num):   #A
+# 函数接受组件名称、分片数量以及那些可以在分片环境下产生正确行为的参数作为参数。
+def sharded_zrangebyscore(component, shards, key, min, max, num):  
     data = []
     for shard in xrange(shards):
-        conn = get_redis_connection("%s:%s"%(component, shard))     #B
-        data.extend(conn.zrangebyscore(                             #C
-            key, min, max, start=0, num=num, withscores=True))      #C
+        # 获取指向当前分片的分片连接。
+        conn = get_redis_connection("%s:%s"%(component, shard))     
+        # 从 Redis 分片上面取出数据。
+        data.extend(conn.zrangebyscore(                             
+            key, min, max, start=0, num=num, withscores=True))      
 
-    def key(pair):                      #D
-        return pair[1], pair[0]         #D
-    data.sort(key=key)                  #D
+    # 首先基于分值对数据进行排序，然后再基于成员进行排序。
+    def key(pair):                     
+        return pair[1], pair[0]        
+    data.sort(key=key)                 
 
-    return data[:num]                   #E
+    # 根据用户请求的数量返回元素。
+    return data[:num]                  
 # <end id="sharded-zrangebyscore"/>
-#A We need to take arguments for the component and number of shards, and we are going to limit the arguments to be passed on to only those that will ensure correct behavior in sharded situations
-#B Fetch the sharded connection for the current shard
-#C Get the data from Redis for this shard
-#D Sort the data based on score then by member
-#E Return only the number of items requested
-#END
 
+
+# 代码清单 10-15
 # <start id="sharded-syndicate-posts"/>
 def syndicate_status(uid, post, start=0, on_lists=False):
     root = 'followers'
@@ -564,22 +601,33 @@ def syndicate_status(uid, post, start=0, on_lists=False):
         key = 'list:out:%s'%uid
         base = 'list:statuses:%s'
 
-    followers = sharded_zrangebyscore(root,                         #A
-        sharded_followers.shards, key, start, 'inf', POSTS_PER_PASS)#A
+    # 通过 ZRANGEBYSCORE 调用，找出下一组关注者。
+    followers = sharded_zrangebyscore(root,                         
+        sharded_followers.shards, key, start, 'inf', POSTS_PER_PASS)
 
-    to_send = defaultdict(list)                             #B
+    # 基于预先分片的结果对个人信息进行分组，
+    # 并把分组后的信息储存到预先准备好的结构里面。
+    to_send = defaultdict(list)                            
     for follower, start in followers:
-        timeline = base % follower                          #C
-        shard = shard_key('timelines',                      #D
-            timeline, sharded_timelines.shards, 2)          #D
-        to_send[shard].append(timeline)                     #E
+        # 构造出储存时间线的键。
+        timeline = base % follower                          
+        # 找到负责储存这个时间线的分片。
+        shard = shard_key('timelines',                     
+            timeline, sharded_timelines.shards, 2)         
+        # 把时间线的键添加到位于同一个分片的其他时间线的后面。
+        to_send[shard].append(timeline)                    
 
     for timelines in to_send.itervalues():
-        pipe = sharded_timelines[timelines[0]].pipeline(False)  #F
+        # 根据储存这组时间线的服务器，
+        # 找出连向它的连接，
+        # 然后创建一个流水线对象。
+        pipe = sharded_timelines[timelines[0]].pipeline(False) 
         for timeline in timelines:
-            pipe.zadd(timeline, **post)                 #G
-            pipe.zremrangebyrank(                       #G
-                timeline, 0, -HOME_TIMELINE_SIZE-1)     #G
+            # 把新发送的消息添加到时间线上面，
+            # 并移除过于陈旧的消息。
+            pipe.zadd(timeline, **post)                
+            pipe.zremrangebyrank(                      
+                timeline, 0, -HOME_TIMELINE_SIZE-1)    
         pipe.execute()
 
     conn = redis.Redis()
@@ -591,14 +639,6 @@ def syndicate_status(uid, post, start=0, on_lists=False):
         execute_later(conn, 'default', 'syndicate_status',
             [uid, post, 0, True])
 # <end id="sharded-syndicate-posts"/>
-#A Fetch the next group of followers using the sharded ZRANGEBYSCORE call
-#B Prepare a structure that will group profile information on a per-shard basis
-#C Calculate the key for the timeline
-#D Find the shard where this timeline would go
-#E Add the timeline key to the rest of the timelines on the same shard
-#F Get a connection to the server for the group of timelines, and create a pipeline
-#G Add the post to the timeline, and remove any posts that are too old
-#END
 
 def _fake_shards_for(conn, component, count, actual):
     assert actual <= 4
