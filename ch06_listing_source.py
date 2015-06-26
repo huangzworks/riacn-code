@@ -1,3 +1,4 @@
+# coding: utf-8
 
 import bisect
 from collections import defaultdict, deque
@@ -14,91 +15,98 @@ import redis
 QUIT = False
 pipe = inv = item = buyer = seller = inventory = None
 
+
+# 代码清单 6-1
 # <start id="_1314_14473_8380"/>
 def add_update_contact(conn, user, contact):
     ac_list = 'recent:' + user
-    pipeline = conn.pipeline(True)     #A
-    pipeline.lrem(ac_list, contact)    #B
-    pipeline.lpush(ac_list, contact)   #C
-    pipeline.ltrim(ac_list, 0, 99)     #D
-    pipeline.execute()                 #E
+    # 准备执行原子操作。
+    pipeline = conn.pipeline(True) 
+    # 如果联系人已经存在，那么移除他。
+    pipeline.lrem(ac_list, contact) 
+    # 将联系人推入到列表的最前端。
+    pipeline.lpush(ac_list, contact) 
+    # 只保留列表里面的前100个联系人。
+    pipeline.ltrim(ac_list, 0, 99)   
+    # 实际地执行以上操作。
+    pipeline.execute()               
 # <end id="_1314_14473_8380"/>
-#A Set up the atomic operation
-#B Remove the contact from the list if it exists
-#C Push the item onto the front of the list
-#D Remove anything beyond the 100th item
-#E Actually execute everything
-#END
+
 
 # <start id="_1314_14473_8383"/>
 def remove_contact(conn, user, contact):
     conn.lrem('recent:' + user, contact)
 # <end id="_1314_14473_8383"/>
-#END
 
+
+# 代码清单 6-2
 # <start id="_1314_14473_8386"/>
 def fetch_autocomplete_list(conn, user, prefix):
-    candidates = conn.lrange('recent:' + user, 0, -1) #A
+    # 获取自动补完列表。
+    candidates = conn.lrange('recent:' + user, 0, -1) 
     matches = []
-    for candidate in candidates:                      #B
-        if candidate.lower().startswith(prefix):      #B
-            matches.append(candidate)                 #C
-    return matches                                    #D
+    # 检查每个候选联系人。
+    for candidate in candidates:                    
+        if candidate.lower().startswith(prefix):  
+            # 发现一个匹配的联系人。
+            matches.append(candidate)         
+    # 返回所有匹配的联系人。
+    return matches                           
 # <end id="_1314_14473_8386"/>
-#A Fetch the autocomplete list
-#B Check each candidate
-#C We found a match
-#D Return all of the matches
-#END
 
+
+# 代码清单 6-3
 # <start id="_1314_14473_8396"/>
-valid_characters = '`abcdefghijklmnopqrstuvwxyz{'             #A
+# 准备一个由已知字符组成的列表。
+valid_characters = '`abcdefghijklmnopqrstuvwxyz{'     
 
 def find_prefix_range(prefix):
-    posn = bisect.bisect_left(valid_characters, prefix[-1:])  #B
-    suffix = valid_characters[(posn or 1) - 1]                #C
-    return prefix[:-1] + suffix + '{', prefix + '{'           #D
+    # 在字符列表中查找前缀字符所处的位置。
+    posn = bisect.bisect_left(valid_characters, prefix[-1:]) 
+    # 找到前驱字符。
+    suffix = valid_characters[(posn or 1) - 1]  
+    # 返回范围。
+    return prefix[:-1] + suffix + '{', prefix + '{'         
 # <end id="_1314_14473_8396"/>
-#A Set up our list of characters that we know about
-#B Find the position of prefix character in our list of characters
-#C Find the predecessor character
-#D Return the range
-#END
 
+
+# 代码清单 6-4
 # <start id="_1314_14473_8399"/>
 def autocomplete_on_prefix(conn, guild, prefix):
-    start, end = find_prefix_range(prefix)                 #A
-    identifier = str(uuid.uuid4())                         #A
-    start += identifier                                    #A
-    end += identifier                                      #A
+    # 根据给定的前缀计算出查找范围的起点和终点。
+    start, end = find_prefix_range(prefix)              
+    identifier = str(uuid.uuid4())                       
+    start += identifier                                   
+    end += identifier                                    
     zset_name = 'members:' + guild
 
-    conn.zadd(zset_name, start, 0, end, 0)                 #B
+    # 将范围的起始元素和结束元素添加到有序集合里面。
+    conn.zadd(zset_name, start, 0, end, 0)
     pipeline = conn.pipeline(True)
     while 1:
         try:
             pipeline.watch(zset_name)
-            sindex = pipeline.zrank(zset_name, start)      #C
-            eindex = pipeline.zrank(zset_name, end)        #C
-            erange = min(sindex + 9, eindex - 2)           #C
+            # 找到两个被插入元素在有序集合中的排名。
+            sindex = pipeline.zrank(zset_name, start)      
+            eindex = pipeline.zrank(zset_name, end)      
+            erange = min(sindex + 9, eindex - 2)        
             pipeline.multi()
-            pipeline.zrem(zset_name, start, end)           #D
-            pipeline.zrange(zset_name, sindex, erange)     #D
-            items = pipeline.execute()[-1]                 #D
+            # 获取范围内的值，然后删除之前插入的起始元素和结束元素。
+            pipeline.zrem(zset_name, start, end)         
+            pipeline.zrange(zset_name, sindex, erange)   
+            items = pipeline.execute()[-1]             
             break
-        except redis.exceptions.WatchError:                #E
-            continue                                       #E
+        # 如果自动补完有序集合已经被其他客户端修改过了，那么进行重试。
+        except redis.exceptions.WatchError:               
+            continue                                     
 
-    return [item for item in items if '{' not in item]     #F
+    # 如果有其他自动补完操作正在执行，
+    # 那么从获取到的元素里面移除起始元素和终结元素。
+    return [item for item in items if '{' not in item]  
 # <end id="_1314_14473_8399"/>
-#A Find the start/end range for the prefix
-#B Add the start/end range items to the ZSET
-#C Find the ranks of our end points
-#D Get the values inside our range, and clean up
-#E Retry if someone modified our autocomplete zset
-#F Remove start/end entries if an autocomplete was in progress
-#END
 
+
+# 代码清单 6-5
 # <start id="_1314_14473_8403"/>
 def join_guild(conn, guild, user):
     conn.zadd('members:' + guild, user, 0)
@@ -108,69 +116,75 @@ def leave_guild(conn, guild, user):
 # <end id="_1314_14473_8403"/>
 #END
 
+
+# 代码清单 6-6
 # <start id="_1314_14473_8431"/>
 def list_item(conn, itemid, sellerid, price):
     #...
-            pipe.watch(inv)                             #A
-            if not pipe.sismember(inv, itemid):         #B
-                pipe.unwatch()                          #B
+            # 监视卖家包裹发生的变动。
+            pipe.watch(inv)                            
+            # 确保被出售的物品仍然存在于卖家的包裹里面。
+            if not pipe.sismember(inv, itemid):        
+                pipe.unwatch()                        
                 return None
 
-            pipe.multi()                                #C
-            pipe.zadd("market:", item, price)           #C
-            pipe.srem(inv, itemid)                      #C
-            pipe.execute()                              #C
+            # 将物品添加到市场里面。
+            pipe.multi()                          
+            pipe.zadd("market:", item, price)     
+            pipe.srem(inv, itemid)                 
+            pipe.execute()                         
             return True
     #...
 # <end id="_1314_14473_8431"/>
-#A Watch for changes to the users's inventory
-#B Verify that the user still has the item to be listed
-#C Actually list the item
-#END
 
+
+# 代码清单 6-7
 # <start id="_1314_14473_8435"/>
 def purchase_item(conn, buyerid, itemid, sellerid, lprice):
     #...
-            pipe.watch("market:", buyer)                #A
+            # 监视市场以及买家个人信息发生的变化。
+            pipe.watch("market:", buyer)             
 
-            price = pipe.zscore("market:", item)        #B
-            funds = int(pipe.hget(buyer, 'funds'))      #B
-            if price != lprice or price > funds:        #B
-                pipe.unwatch()                          #B
+            # 检查物品是否已经售出、物品的价格是否已经发生了变化，
+            # 以及买家是否有足够的金钱来购买这件物品。
+            price = pipe.zscore("market:", item)     
+            funds = int(pipe.hget(buyer, 'funds'))    
+            if price != lprice or price > funds:     
+                pipe.unwatch()                       
                 return None
 
-            pipe.multi()                                #C
-            pipe.hincrby(seller, 'funds', int(price))   #C
-            pipe.hincrby(buyerid, 'funds', int(-price)) #C
-            pipe.sadd(inventory, itemid)                #C
-            pipe.zrem("market:", item)                  #C
-            pipe.execute()                              #C
+            # 将买家支付的货款转移给卖家，并将被卖出的物品转移给买家。
+            pipe.multi()                              
+            pipe.hincrby(seller, 'funds', int(price)) 
+            pipe.hincrby(buyerid, 'funds', int(-price))
+            pipe.sadd(inventory, itemid)               
+            pipe.zrem("market:", item)                 
+            pipe.execute()                            
             return True
 
     #...
 # <end id="_1314_14473_8435"/>
-#A Watch for changes to the market and the buyer's account information
-#B Check for a sold/repriced item or insufficient funds
-#C Transfer funds from the buyer to the seller, and transfer the item to the buyer
-#END
 
+
+# 代码清单 6-8
 # <start id="_1314_14473_8641"/>
 def acquire_lock(conn, lockname, acquire_timeout=10):
-    identifier = str(uuid.uuid4())                      #A
+    # 128位随机标识符。
+    identifier = str(uuid.uuid4())                     
 
     end = time.time() + acquire_timeout
     while time.time() < end:
-        if conn.setnx('lock:' + lockname, identifier):  #B
+        # 尝试取得锁。
+        if conn.setnx('lock:' + lockname, identifier): 
             return identifier
 
         time.sleep(.001)
 
     return False
 # <end id="_1314_14473_8641"/>
-#A A 128-bit random identifier
-#B Get the lock
-#END
 
+
+# 代码清单 6-9
 # <start id="_1314_14473_8645"/>
 def purchase_item_with_lock(conn, buyerid, itemid, sellerid):
     buyer = "users:%s" % buyerid
@@ -178,33 +192,34 @@ def purchase_item_with_lock(conn, buyerid, itemid, sellerid):
     item = "%s.%s" % (itemid, sellerid)
     inventory = "inventory:%s" % buyerid
 
-    locked = acquire_lock(conn, 'market:')     #A
+    # 尝试获取锁。
+    locked = acquire_lock(conn, 'market:')   
     if not locked:
         return False
 
     pipe = conn.pipeline(True)
     try:
-        pipe.zscore("market:", item)           #B
-        pipe.hget(buyer, 'funds')              #B
-        price, funds = pipe.execute()          #B
-        if price is None or price > funds:     #B
-            return None                        #B
+        # 检查物品是否已经售出，以及买家是否有足够的金钱来购买物品。
+        pipe.zscore("market:", item)        
+        pipe.hget(buyer, 'funds')            
+        price, funds = pipe.execute()         
+        if price is None or price > funds:   
+            return None                     
 
-        pipe.hincrby(seller, 'funds', int(price))  #C
-        pipe.hincrby(buyer, 'funds', int(-price))  #C
-        pipe.sadd(inventory, itemid)               #C
-        pipe.zrem("market:", item)                 #C
-        pipe.execute()                             #C
+        # 将买家支付的货款转移给卖家，并将售出的物品转移给买家。
+        pipe.hincrby(seller, 'funds', int(price)) 
+        pipe.hincrby(buyer, 'funds', int(-price)) 
+        pipe.sadd(inventory, itemid)            
+        pipe.zrem("market:", item)               
+        pipe.execute()                           
         return True
     finally:
-        release_lock(conn, 'market:', locked)      #D
+        # 释放锁。
+        release_lock(conn, 'market:', locked)   
 # <end id="_1314_14473_8645"/>
-#A Get the lock
-#B Check for a sold item or insufficient funds
-#C Transfer funds from the buyer to the seller, and transfer the item to the buyer
-#D Release the lock
-#END
 
+
+# 代码清单 6-10
 # <start id="_1314_14473_8650"/>
 def release_lock(conn, lockname, identifier):
     pipe = conn.pipeline(True)
@@ -212,138 +227,147 @@ def release_lock(conn, lockname, identifier):
 
     while True:
         try:
-            pipe.watch(lockname)                  #A
-            if pipe.get(lockname) == identifier:  #A
-                pipe.multi()                      #B
-                pipe.delete(lockname)             #B
-                pipe.execute()                    #B
-                return True                       #B
+            # 检查并确认进程还持有着锁。
+            pipe.watch(lockname)                  
+            if pipe.get(lockname) == identifier:  
+                # 释放锁。
+                pipe.multi()                  
+                pipe.delete(lockname)      
+                pipe.execute()             
+                return True                    
 
             pipe.unwatch()
             break
 
-        except redis.exceptions.WatchError:       #C
-            pass                                  #C
+        # 有其他客户端修改了锁；重试。
+        except redis.exceptions.WatchError:     
+            pass                                 
 
-    return False                                  #D
+    # 进程已经失去了锁。
+    return False                                
 # <end id="_1314_14473_8650"/>
-#A Check and verify that we still have the lock
-#B Release the lock
-#C Someone else did something with the lock, retry
-#D We lost the lock
-#END
 
+
+# 代码清单 6-11
 # <start id="_1314_14473_8790"/>
 def acquire_lock_with_timeout(
     conn, lockname, acquire_timeout=10, lock_timeout=10):
-    identifier = str(uuid.uuid4())                      #A
+    # 128位随机标识符。
+    identifier = str(uuid.uuid4())                   
     lockname = 'lock:' + lockname
-    lock_timeout = int(math.ceil(lock_timeout))         #D
+    # 确保传给EXPIRE的都是整数。
+    lock_timeout = int(math.ceil(lock_timeout))     
 
     end = time.time() + acquire_timeout
     while time.time() < end:
-        if conn.setnx(lockname, identifier):            #B
-            conn.expire(lockname, lock_timeout)         #B
+        # 获取锁并设置过期时间。
+        if conn.setnx(lockname, identifier):        
+            conn.expire(lockname, lock_timeout)    
             return identifier
-        elif not conn.ttl(lockname):                    #C
-            conn.expire(lockname, lock_timeout)         #C
+        # 检查过期时间，并在有需要时对其进行更新。
+        elif not conn.ttl(lockname):                 
+            conn.expire(lockname, lock_timeout)   
 
         time.sleep(.001)
 
     return False
 # <end id="_1314_14473_8790"/>
-#A A 128-bit random identifier
-#B Get the lock and set the expiration
-#C Check and update the expiration time as necessary
-#D Only pass integers to our EXPIRE calls
-#END
 
+
+# 代码清单 6-12 
 # <start id="_1314_14473_8986"/>
 def acquire_semaphore(conn, semname, limit, timeout=10):
-    identifier = str(uuid.uuid4())                             #A
+    # 128位随机标识符。
+    identifier = str(uuid.uuid4())                         
     now = time.time()
 
     pipeline = conn.pipeline(True)
-    pipeline.zremrangebyscore(semname, '-inf', now - timeout)  #B
-    pipeline.zadd(semname, identifier, now)                    #C
-    pipeline.zrank(semname, identifier)                        #D
-    if pipeline.execute()[-1] < limit:                         #D
+    # 清理过期的信号量持有者。
+    pipeline.zremrangebyscore(semname, '-inf', now - timeout) 
+    # 尝试获取信号量。
+    pipeline.zadd(semname, identifier, now)                 
+    # 检查是否成功取得了信号量。
+    pipeline.zrank(semname, identifier)              
+    if pipeline.execute()[-1] < limit:                        
         return identifier
 
-    conn.zrem(semname, identifier)                             #E
+    # 获取信号量失败，删除之前添加的标识符。
+    conn.zrem(semname, identifier)                            
     return None
 # <end id="_1314_14473_8986"/>
-#A A 128-bit random identifier
-#B Time out old semaphore holders
-#C Try to acquire the semaphore
-#D Check to see if we have it
-#E We failed to get the semaphore, discard our identifier
-#END
 
+
+# 代码清单 6-13
 # <start id="_1314_14473_8990"/>
 def release_semaphore(conn, semname, identifier):
-    return conn.zrem(semname, identifier)                      #A
+    # 如果信号量已经被正确地释放，那么返回True；
+    # 返回False则表示该信号量已经因为过期而被删除了。
+    return conn.zrem(semname, identifier)                   
 # <end id="_1314_14473_8990"/>
-#A Returns True if the semaphore was properly released, False if it had timed out
-#END
 
+
+# 代码清单 6-14
 # <start id="_1314_14473_9004"/>
 def acquire_fair_semaphore(conn, semname, limit, timeout=10):
-    identifier = str(uuid.uuid4())                             #A
+    # 128位随机标识符。
+    identifier = str(uuid.uuid4())                           
     czset = semname + ':owner'
     ctr = semname + ':counter'
 
     now = time.time()
     pipeline = conn.pipeline(True)
-    pipeline.zremrangebyscore(semname, '-inf', now - timeout)  #B
-    pipeline.zinterstore(czset, {czset: 1, semname: 0})        #B
+    # 删除超时的信号量。
+    pipeline.zremrangebyscore(semname, '-inf', now - timeout)  
+    pipeline.zinterstore(czset, {czset: 1, semname: 0})      
 
-    pipeline.incr(ctr)                                         #C
-    counter = pipeline.execute()[-1]                           #C
+    # 对计数器执行自增操作，并获取操作执行之后的值。
+    pipeline.incr(ctr)                                       
+    counter = pipeline.execute()[-1]                         
 
-    pipeline.zadd(semname, identifier, now)                    #D
-    pipeline.zadd(czset, identifier, counter)                  #D
+    # 尝试获取信号量。
+    pipeline.zadd(semname, identifier, now)                   
+    pipeline.zadd(czset, identifier, counter)                
 
-    pipeline.zrank(czset, identifier)                          #E
-    if pipeline.execute()[-1] < limit:                         #E
-        return identifier                                      #F
+    # 通过检查排名来判断客户端是否取得了信号量。
+    pipeline.zrank(czset, identifier)                         
+    if pipeline.execute()[-1] < limit:                       
+        # 客户端成功取得了信号量。
+        return identifier                                    
 
-    pipeline.zrem(semname, identifier)                         #G
-    pipeline.zrem(czset, identifier)                           #G
+    # 客户端未能取得信号量，清理无用数据。
+    pipeline.zrem(semname, identifier)                        
+    pipeline.zrem(czset, identifier)                         
     pipeline.execute()
     return None
 # <end id="_1314_14473_9004"/>
-#A A 128-bit random identifier
-#B Time out old entries
-#C Get the counter
-#D Try to acquire the semaphore
-#E Check the rank to determine if we got the semaphore
-#F We got the semaphore
-#G We didn't get the semaphore, clean out the bad data
-#END
 
+
+# 代码清单 6-15
 # <start id="_1314_14473_9014"/>
 def release_fair_semaphore(conn, semname, identifier):
     pipeline = conn.pipeline(True)
     pipeline.zrem(semname, identifier)
     pipeline.zrem(semname + ':owner', identifier)
-    return pipeline.execute()[0]                               #A
+    # 返回True表示信号量已被正确地释放，
+    # 返回False则表示想要释放的信号量已经因为超时而被删除了。
+    return pipeline.execute()[0]                             
 # <end id="_1314_14473_9014"/>
-#A Returns True if the semaphore was properly released, False if it had timed out
-#END
 
+
+# 代码清单 6-16
 # <start id="_1314_14473_9022"/>
 def refresh_fair_semaphore(conn, semname, identifier):
-    if conn.zadd(semname, identifier, time.time()):            #A
-        release_fair_semaphore(conn, semname, identifier)      #B
-        return False                                           #B
-    return True                                                #C
+    # 更新客户端持有的信号量。
+    if conn.zadd(semname, identifier, time.time()):          
+        # 告知调用者，客户端已经失去了信号量。
+        release_fair_semaphore(conn, semname, identifier)   
+        return False                                      
+    # 客户端仍然持有信号量。
+    return True                                              
 # <end id="_1314_14473_9022"/>
-#A Update our semaphore
-#B We lost our semaphore, report back
-#C We still have our semaphore
-#END
 
+
+# 代码清单 6-17
 # <start id="_1314_14473_9031"/>
 def acquire_semaphore_with_lock(conn, semname, limit, timeout=10):
     identifier = acquire_lock(conn, semname, acquire_timeout=.01)
@@ -353,68 +377,72 @@ def acquire_semaphore_with_lock(conn, semname, limit, timeout=10):
         finally:
             release_lock(conn, semname, identifier)
 # <end id="_1314_14473_9031"/>
-#END
 
+
+# 代码清单 6-18
 # <start id="_1314_14473_9056"/>
 def send_sold_email_via_queue(conn, seller, item, price, buyer):
+    # 准备好待发送邮件。
     data = {
-        'seller_id': seller,                    #A
-        'item_id': item,                        #A
-        'price': price,                         #A
-        'buyer_id': buyer,                      #A
-        'time': time.time()                     #A
+        'seller_id': seller,                 
+        'item_id': item,                      
+        'price': price,                         
+        'buyer_id': buyer,                      
+        'time': time.time()                    
     }
-    conn.rpush('queue:email', json.dumps(data)) #B
+    # 将待发送邮件推入到队列里面。
+    conn.rpush('queue:email', json.dumps(data)) 
 # <end id="_1314_14473_9056"/>
-#A Prepare the item
-#B Push the item onto the queue
-#END
 
+
+# 代码清单 6-19
 # <start id="_1314_14473_9060"/>
 def process_sold_email_queue(conn):
     while not QUIT:
-        packed = conn.blpop(['queue:email'], 30)                  #A
-        if not packed:                                            #B
-            continue                                              #B
+        # 尝试获取一封待发送邮件。
+        packed = conn.blpop(['queue:email'], 30)                  
+        # 队列里面暂时还没有待发送邮件，重试。
+        if not packed:                                          
+            continue
 
-        to_send = json.loads(packed[1])                           #C
+        # 从JSON对象中解码出邮件信息。
+        to_send = json.loads(packed[1])                       
         try:
-            fetch_data_and_send_sold_email(to_send)               #D
+            # 使用预先编写好的邮件发送函数来发送邮件。
+            fetch_data_and_send_sold_email(to_send)            
         except EmailSendError as err:
             log_error("Failed to send sold email", err, to_send)
         else:
             log_success("Sent sold email", to_send)
 # <end id="_1314_14473_9060"/>
-#A Try to get a message to send
-#B No message to send, try again
-#C Load the packed email information
-#D Send the email using our pre-written emailing function
-#END
 
+
+# 代码清单 6-20
 # <start id="_1314_14473_9066"/>
 def worker_watch_queue(conn, queue, callbacks):
     while not QUIT:
-        packed = conn.blpop([queue], 30)                    #A
-        if not packed:                                      #B
-            continue                                        #B
+        # 尝试从队列里面取出一项待执行任务。
+        packed = conn.blpop([queue], 30)                   
+        # 队列为空，没有任务需要执行；重试。
+        if not packed:                                     
+            continue                                      
 
-        name, args = json.loads(packed[1])                  #C
-        if name not in callbacks:                           #D
-            log_error("Unknown callback %s"%name)           #D
-            continue                                        #D
-        callbacks[name](*args)                              #E
+        # 解码任务信息。
+        name, args = json.loads(packed[1])                
+        # 没有找到任务指定的回调函数，用日志记录错误并重试。
+        if name not in callbacks:                         
+            log_error("Unknown callback %s"%name)        
+            continue                                      
+        # 执行任务。
+        callbacks[name](*args)                            
 # <end id="_1314_14473_9066"/>
-#A Try to get an item from the queue
-#B There is nothing to work on, try again
-#C Unpack the work item
-#D The function is unknown, log the error and try again
-#E Execute the task
-#END
 
+
+# 代码清单 6-21
 # <start id="_1314_14473_9074"/>
-def worker_watch_queues(conn, queues, callbacks):   #A
+def worker_watch_queues(conn, queues, callbacks):   # 实现优先级特性要修改的第一行代码。
     while not QUIT:
-        packed = conn.blpop(queues, 30)             #B
+        packed = conn.blpop(queues, 30)             # 实现优先级特性要修改的第二行代码。
         if not packed:
             continue
 
@@ -424,380 +452,390 @@ def worker_watch_queues(conn, queues, callbacks):   #A
             continue
         callbacks[name](*args)
 # <end id="_1314_14473_9074"/>
-#A The first changed line to add priority support
-#B The second changed line to add priority support
-#END
 
+
+# 代码清单 6-22
 # <start id="_1314_14473_9094"/>
 def execute_later(conn, queue, name, args, delay=0):
-    identifier = str(uuid.uuid4())                          #A
-    item = json.dumps([identifier, queue, name, args])      #B
+    # 创建唯一标识符。
+    identifier = str(uuid.uuid4())                        
+    # 准备好需要入队的任务。
+    item = json.dumps([identifier, queue, name, args])  
     if delay > 0:
-        conn.zadd('delayed:', item, time.time() + delay)    #C
+        # 延迟执行这个任务。
+        conn.zadd('delayed:', item, time.time() + delay) 
     else:
-        conn.rpush('queue:' + queue, item)                  #D
-    return identifier                                       #E
+        # 立即执行这个任务。
+        conn.rpush('queue:' + queue, item)                 
+    # 返回标识符。
+    return identifier                                    
 # <end id="_1314_14473_9094"/>
-#A Generate a unique identifier
-#B Prepare the item for the queue
-#C Delay the item
-#D Execute the item immediately
-#E Return the identifier
-#END
 
+
+# 代码清单 6-23
 # <start id="_1314_14473_9099"/>
 def poll_queue(conn):
     while not QUIT:
-        item = conn.zrange('delayed:', 0, 0, withscores=True)   #A
-        if not item or item[0][1] > time.time():                #B
-            time.sleep(.01)                                     #B
-            continue                                            #B
+        # 获取队列中的第一个任务。
+        item = conn.zrange('delayed:', 0, 0, withscores=True)   
+        # 队列没有包含任何任务，或者任务的执行时间未到。
+        if not item or item[0][1] > time.time():               
+            time.sleep(.01)                                    
+            continue                                            
 
-        item = item[0][0]                                       #C
-        identifier, queue, function, args = json.loads(item)    #C
+        # 解码要被执行的任务，弄清楚它应该被推入到哪个任务队列里面。
+        item = item[0][0]                                      
+        identifier, queue, function, args = json.loads(item)   
 
-        locked = acquire_lock(conn, identifier)                 #D
-        if not locked:                                          #E
-            continue                                            #E
+        # 为了对任务进行移动，尝试获取锁。
+        locked = acquire_lock(conn, identifier)                
+        # 获取锁失败，跳过后续步骤并重试。
+        if not locked:                                         
+            continue                                          
 
-        if conn.zrem('delayed:', item):                         #F
-            conn.rpush('queue:' + queue, item)                  #F
+        # 将任务推入到适当的任务队列里面。
+        if conn.zrem('delayed:', item):                       
+            conn.rpush('queue:' + queue, item)                 
 
-        release_lock(conn, identifier, locked)                  #G
+        # 释放锁。
+        release_lock(conn, identifier, locked)                 
 # <end id="_1314_14473_9099"/>
-#A Get the first item in the queue
-#B No item or the item is still to be execued in the future
-#C Unpack the item so that we know where it should go
-#D Get the lock for the item
-#E We couldn't get the lock, so skip it and try again
-#F Move the item to the proper list queue
-#G Release the lock
-#END
 
+
+# 代码清单 6-24
 # <start id="_1314_14473_9124"/>
 def create_chat(conn, sender, recipients, message, chat_id=None):
-    chat_id = chat_id or str(conn.incr('ids:chat:'))      #A
+    # 获得新的群组ID。
+    chat_id = chat_id or str(conn.incr('ids:chat:'))     
 
-    recipients.append(sender)                             #E
-    recipientsd = dict((r, 0) for r in recipients)        #E
+    # 创建一个由用户和分值组成的字典，字典里面的信息将被添加到有序集合里面。
+    recipients.append(sender)                           
+    recipientsd = dict((r, 0) for r in recipients)       
 
     pipeline = conn.pipeline(True)
-    pipeline.zadd('chat:' + chat_id, **recipientsd)       #B
-    for rec in recipients:                                #C
-        pipeline.zadd('seen:' + rec, chat_id, 0)          #C
+    # 将所有参与群聊的用户添加到有序集合里面。
+    pipeline.zadd('chat:' + chat_id, **recipientsd)      
+    # 初始化已读有序集合。
+    for rec in recipients:                                
+        pipeline.zadd('seen:' + rec, chat_id, 0)          
     pipeline.execute()
 
-    return send_message(conn, chat_id, sender, message)   #D
+    # 发送消息。
+    return send_message(conn, chat_id, sender, message)  
 # <end id="_1314_14473_9124"/>
-#A Get a new chat id
-#E Set up a dictionary of users to scores to add to the chat ZSET
-#B Create the set with the list of people participating
-#C Initialize the seen zsets
-#D Send the message
-#END
 
+
+# 代码清单 6-25
 # <start id="_1314_14473_9127"/>
 def send_message(conn, chat_id, sender, message):
     identifier = acquire_lock(conn, 'chat:' + chat_id)
     if not identifier:
         raise Exception("Couldn't get the lock")
     try:
-        mid = conn.incr('ids:' + chat_id)                #A
-        ts = time.time()                                 #A
-        packed = json.dumps({                            #A
-            'id': mid,                                   #A
-            'ts': ts,                                    #A
-            'sender': sender,                            #A
-            'message': message,                          #A
-        })                                               #A
+        # 筹备待发送的消息。
+        mid = conn.incr('ids:' + chat_id) 
+        ts = time.time()                                 
+        packed = json.dumps({                            
+            'id': mid,                                   
+            'ts': ts,                                   
+            'sender': sender,                           
+            'message': message,                         
+        })                                              
 
-        conn.zadd('msgs:' + chat_id, packed, mid)        #B
+        # 将消息发送至群组。
+        conn.zadd('msgs:' + chat_id, packed, mid)     
     finally:
         release_lock(conn, 'chat:' + chat_id, identifier)
     return chat_id
 # <end id="_1314_14473_9127"/>
-#A Prepare the message
-#B Send the message to the chat
-#END
 
+
+# 代码清单 6-26
 # <start id="_1314_14473_9132"/>
 def fetch_pending_messages(conn, recipient):
-    seen = conn.zrange('seen:' + recipient, 0, -1, withscores=True) #A
+    # 获取最后接收到的消息的ID。
+    seen = conn.zrange('seen:' + recipient, 0, -1, withscores=True) 
 
     pipeline = conn.pipeline(True)
 
-    for chat_id, seen_id in seen:                               #B
-        pipeline.zrangebyscore(                                 #B
-            'msgs:' + chat_id, seen_id+1, 'inf')                #B
-    chat_info = zip(seen, pipeline.execute())                   #C
+    # 获取所有未读消息。
+    for chat_id, seen_id in seen:                              
+        pipeline.zrangebyscore(                              
+            'msgs:' + chat_id, seen_id+1, 'inf')               
+    # 这些数据将被返回给函数调用者。
+    chat_info = zip(seen, pipeline.execute())                 
 
     for i, ((chat_id, seen_id), messages) in enumerate(chat_info):
         if not messages:
             continue
         messages[:] = map(json.loads, messages)
-        seen_id = messages[-1]['id']                            #D
-        conn.zadd('chat:' + chat_id, recipient, seen_id)        #D
+        # 使用最新收到的消息来更新群组有序集合。
+        seen_id = messages[-1]['id']                         
+        conn.zadd('chat:' + chat_id, recipient, seen_id)       
 
-        min_id = conn.zrange(                                   #E
-            'chat:' + chat_id, 0, 0, withscores=True)           #E
+        # 找出那些所有人都已经阅读过的消息。
+        min_id = conn.zrange(                                
+            'chat:' + chat_id, 0, 0, withscores=True)          
 
-        pipeline.zadd('seen:' + recipient, chat_id, seen_id)    #F
+        # 更新已读消息有序集合。
+        pipeline.zadd('seen:' + recipient, chat_id, seen_id)   
         if min_id:
-            pipeline.zremrangebyscore(                          #G
-                'msgs:' + chat_id, 0, min_id[0][1])             #G
+            # 清除那些已经被所有人阅读过的消息。
+            pipeline.zremrangebyscore(                        
+                'msgs:' + chat_id, 0, min_id[0][1])             
         chat_info[i] = (chat_id, messages)
     pipeline.execute()
 
     return chat_info
 # <end id="_1314_14473_9132"/>
-#A Get the last message ids received
-#B Fetch all new messages
-#C Prepare information about the data to be returned
-#D Update the 'chat' ZSET with the most recently received message
-#E Discover messages that have been seen by all users
-#F Update the 'seen' ZSET
-#G Clean out messages that have been seen by all users
-#END
 
+
+# 代码清单 2-27
 # <start id="_1314_14473_9135"/>
 def join_chat(conn, chat_id, user):
-    message_id = int(conn.get('ids:' + chat_id))                #A
+    # 取得最新群组消息的ID。
+    message_id = int(conn.get('ids:' + chat_id))            
 
     pipeline = conn.pipeline(True)
-    pipeline.zadd('chat:' + chat_id, user, message_id)          #B
-    pipeline.zadd('seen:' + user, chat_id, message_id)          #C
+    # 将用户添加到群组成员列表里面。
+    pipeline.zadd('chat:' + chat_id, user, message_id)         
+    # 将群组添加到用户的已读列表里面。
+    pipeline.zadd('seen:' + user, chat_id, message_id)        
     pipeline.execute()
 # <end id="_1314_14473_9135"/>
-#A Get the most recent message id for the chat
-#B Add the user to the chat member list
-#C Add the chat to the users's seen list
-#END
 
+
+# 代码清单 2-28
 # <start id="_1314_14473_9136"/>
 def leave_chat(conn, chat_id, user):
     pipeline = conn.pipeline(True)
-    pipeline.zrem('chat:' + chat_id, user)                      #A
-    pipeline.zrem('seen:' + user, chat_id)                      #A
-    pipeline.zcard('chat:' + chat_id)                           #B
+    # 从群组里面移除给定的用户。
+    pipeline.zrem('chat:' + chat_id, user)                     
+    pipeline.zrem('seen:' + user, chat_id)                     
+    # 查看群组剩余成员的数量。
+    pipeline.zcard('chat:' + chat_id)                          
 
     if not pipeline.execute()[-1]:
-        pipeline.delete('msgs:' + chat_id)                      #C
-        pipeline.delete('ids:' + chat_id)                       #C
+        # 删除群组。
+        pipeline.delete('msgs:' + chat_id)                    
+        pipeline.delete('ids:' + chat_id)                     
         pipeline.execute()
     else:
-        oldest = conn.zrange(                                   #D
-            'chat:' + chat_id, 0, 0, withscores=True)           #D
-        conn.zremrangebyscore('chat:' + chat_id, 0, oldest[0][1])     #E
+        # 查找那些已经被所有成员阅读过的消息。
+        oldest = conn.zrange(                                  
+            'chat:' + chat_id, 0, 0, withscores=True)          
+        # 删除那些已经被所有成员阅读过的消息。
+        conn.zremrangebyscore('chat:' + chat_id, 0, oldest[0][1])    
 # <end id="_1314_14473_9136"/>
-#A Remove the user from the chat
-#B Find the number of remaining group members
-#C Delete the chat
-#D Find the oldest message seen by all users
-#E Delete old messages from the chat
-#END
 
+
+# 代码清单 2-29
 # <start id="_1314_15044_3669"/>
-aggregates = defaultdict(lambda: defaultdict(int))      #A
+# 本地聚合数据字典。
+aggregates = defaultdict(lambda: defaultdict(int))     
 
 def daily_country_aggregate(conn, line):
     if line:
         line = line.split()
-        ip = line[0]                                    #B
-        day = line[1]                                   #B
-        country = find_city_by_ip_local(ip)[2]          #C
-        aggregates[day][country] += 1                   #D
+        # 提取日志行中的信息。
+        ip = line[0]                                    
+        day = line[1]                                   
+        # 根据IP地址判断用户所在国家。
+        country = find_city_by_ip_local(ip)[2]        
+        # 对本地聚合数据执行自增操作。
+        aggregates[day][country] += 1                  
         return
 
-    for day, aggregate in aggregates.items():           #E
-        conn.zadd('daily:country:' + day, **aggregate)  #E
-        del aggregates[day]                             #E
+    # 当天的日志文件已经处理完毕，将聚合计算的结果写入到Redis里面。
+    for day, aggregate in aggregates.items():          
+        conn.zadd('daily:country:' + day, **aggregate) 
+        del aggregates[day]                           
 # <end id="_1314_15044_3669"/>
-#A Prepare the local aggregate dictionary
-#B Extract the information from our log lines
-#C Find the country from the IP address
-#D Increment our local aggregate
-#E The day file is done, write our aggregate to Redis
-#END
 
+
+# 代码清单 2-30
 # <start id="_1314_14473_9209"/>
 def copy_logs_to_redis(conn, path, channel, count=10,
                        limit=2**30, quit_when_done=True):
     bytes_in_redis = 0
     waiting = deque()
-    create_chat(conn, 'source', map(str, range(count)), '', channel) #I
+    # 创建用于向客户端发送消息的群组。
+    create_chat(conn, 'source', map(str, range(count)), '', channel) 
     count = str(count)
-    for logfile in sorted(os.listdir(path)):               #A
+    # 遍历所有日志文件。
+    for logfile in sorted(os.listdir(path)):             
         full_path = os.path.join(path, logfile)
 
         fsize = os.stat(full_path).st_size
-        while bytes_in_redis + fsize > limit:              #B
-            cleaned = _clean(conn, channel, waiting, count)#B
-            if cleaned:                                    #B
-                bytes_in_redis -= cleaned                  #B
-            else:                                          #B
-                time.sleep(.25)                            #B
+        # 如果程序需要更多空间，那么清除已经处理完毕的文件。
+        while bytes_in_redis + fsize > limit:              
+            cleaned = _clean(conn, channel, waiting, count)
+            if cleaned:                                  
+                bytes_in_redis -= cleaned                
+            else:                                       
+                time.sleep(.25)                          
 
-        with open(full_path, 'rb') as inp:                 #C
-            block = ' '                                    #C
-            while block:                                   #C
-                block = inp.read(2**17)                    #C
-                conn.append(channel+logfile, block)        #C
+        # 将文件上传至Redis。
+        with open(full_path, 'rb') as inp:           
+            block = ' '                          
+            while block:                                 
+                block = inp.read(2**17)                  
+                conn.append(channel+logfile, block)      
 
-        send_message(conn, channel, 'source', logfile)     #D
+        # 提醒监听者，文件已经准备就绪。
+        send_message(conn, channel, 'source', logfile)    
 
-        bytes_in_redis += fsize                            #E
-        waiting.append((logfile, fsize))                   #E
+        # 对本地记录的Redis内存占用量相关信息进行更新。
+        bytes_in_redis += fsize                          
+        waiting.append((logfile, fsize))                  
 
-    if quit_when_done:                                     #F
-        send_message(conn, channel, 'source', ':done')     #F
+    # 所有日志文件已经处理完毕，向监听者报告此事。
+    if quit_when_done:                                    
+        send_message(conn, channel, 'source', ':done')    
 
-    while waiting:                                         #G
-        cleaned = _clean(conn, channel, waiting, count)    #G
-        if cleaned:                                        #G
-            bytes_in_redis -= cleaned                      #G
-        else:                                              #G
-            time.sleep(.25)                                #G
+    # 在工作完成之后，清理无用的日志文件。
+    while waiting:                                        
+        cleaned = _clean(conn, channel, waiting, count)   
+        if cleaned:                                       
+            bytes_in_redis -= cleaned                     
+        else:                                             
+            time.sleep(.25)                             
 
-def _clean(conn, channel, waiting, count):                 #H
-    if not waiting:                                        #H
-        return 0                                           #H
-    w0 = waiting[0][0]                                     #H
-    if conn.get(channel + w0 + ':done') == count:          #H
-        conn.delete(channel + w0, channel + w0 + ':done')  #H
-        return waiting.popleft()[1]                        #H
-    return 0                                               #H
+# 对Redis进行清理的详细步骤。
+def _clean(conn, channel, waiting, count):                
+    if not waiting:                                        
+        return 0                                           
+    w0 = waiting[0][0]                                     
+    if conn.get(channel + w0 + ':done') == count:          
+        conn.delete(channel + w0, channel + w0 + ':done')  
+        return waiting.popleft()[1]                        
+    return 0                                               
 # <end id="_1314_14473_9209"/>
-#I Create the chat that will be used to send messages to clients
-#A Iterate over all of the logfiles
-#B Clean out finished files if we need more room
-#C Upload the file to Redis
-#D Notify the listeners that the file is ready
-#E Update our local information about Redis' memory use
-#F We are out of files, so signal that it is done
-#G Clean up the files when we are done
-#H How we actually perform the cleanup from Redis
-#END
 
+
+# 代码清单 6-31
 # <start id="_1314_14473_9213"/>
 def process_logs_from_redis(conn, id, callback):
     while 1:
-        fdata = fetch_pending_messages(conn, id)                    #A
+        # 获取文件列表。
+        fdata = fetch_pending_messages(conn, id)                    
 
         for ch, mdata in fdata:
             for message in mdata:
                 logfile = message['message']
 
-                if logfile == ':done':                                #B
-                    return                                            #B
+                # 所有日志行已经处理完毕。
+                if logfile == ':done':                                
+                    return                                            
                 elif not logfile:
                     continue
 
-                block_reader = readblocks                             #C
-                if logfile.endswith('.gz'):                           #C
-                    block_reader = readblocks_gz                      #C
+                # 选择一个块读取器（block reader）。
+                block_reader = readblocks                             
+                if logfile.endswith('.gz'):                           
+                    block_reader = readblocks_gz                      
 
-                for line in readlines(conn, ch+logfile, block_reader):#D
-                    callback(conn, line)                              #E
-                callback(conn, None)                                  #F
+                # 遍历日志行。
+                for line in readlines(conn, ch+logfile, block_reader):
+                    # 将日志行传递给回调函数。
+                    callback(conn, line)                              
+                # 强制地刷新聚合数据缓存。
+                callback(conn, None)                                 
 
-                conn.incr(ch + logfile + ':done')                     #G
+                # 报告日志已经处理完毕。
+                conn.incr(ch + logfile + ':done')                    
 
         if not fdata:
             time.sleep(.1)
 # <end id="_1314_14473_9213"/>
-#A Fetch the list of files
-#B No more logfiles
-#C Choose a block reader
-#D Iterate over the lines
-#E Pass each line to the callback
-#F Force a flush of our aggregate caches
-#G Report that we are finished with the log
-#END
 
+
+# 代码清单 6-32
 # <start id="_1314_14473_9221"/>
 def readlines(conn, key, rblocks):
     out = ''
     for block in rblocks(conn, key):
         out += block
-        posn = out.rfind('\n')                      #A
-        if posn >= 0:                               #B
-            for line in out[:posn].split('\n'):     #C
-                yield line + '\n'                   #D
-            out = out[posn+1:]                      #E
-        if not block:                               #F
+        # 查找位于文本最右端的断行符；如果断行符不存在，那么rfind()返回-1。
+        posn = out.rfind('\n')                      
+        # 找到一个断行符。
+        if posn >= 0:                               
+            # 根据断行符来分割日志行。
+            for line in out[:posn].split('\n'):    
+                # 向调用者返回每个行。
+                yield line + '\n'                  
+            # 保留余下的数据。
+            out = out[posn+1:]                     
+        # 所有数据块已经处理完毕。
+        if not block:                              
             yield out
             break
 # <end id="_1314_14473_9221"/>
-#A Find the rightmost linebreak if any - rfind() returns -1 on failure
-#B We found a line break
-#C Split on all of the line breaks
-#D Yield each line
-#E Keep track of the trailing data
-#F We are out of data
-#END
 
+
+# 代码清单 6-33
 # <start id="_1314_14473_9225"/>
 def readblocks(conn, key, blocksize=2**17):
     lb = blocksize
     pos = 0
-    while lb == blocksize:                                  #A
-        block = conn.substr(key, pos, pos + blocksize - 1)  #B
-        yield block                                         #C
-        lb = len(block)                                     #C
-        pos += lb                                           #C
+    # 尽可能地读取更多数据，直到出现不完整读操作（partial read）为止。
+    while lb == blocksize:                                 
+        # 获取数据块。
+        block = conn.substr(key, pos, pos + blocksize - 1) 
+        # 准备进行下一次遍历。
+        yield block                                        
+        lb = len(block)                                    
+        pos += lb                                          
     yield ''
 # <end id="_1314_14473_9225"/>
-#A Keep going while we got as much as we expected
-#B Fetch the block
-#C Prepare for the next pass
-#END
 
+
+# 代码清单 6-34
 # <start id="_1314_14473_9229"/>
 def readblocks_gz(conn, key):
     inp = ''
     decoder = None
-    for block in readblocks(conn, key, 2**17):                  #A
+    # 从Redis里面读入原始数据。
+    for block in readblocks(conn, key, 2**17):                 
         if not decoder:
             inp += block
             try:
-                if inp[:3] != "\x1f\x8b\x08":                #B
-                    raise IOError("invalid gzip data")          #B
-                i = 10                                          #B
-                flag = ord(inp[3])                              #B
-                if flag & 4:                                    #B
-                    i += 2 + ord(inp[i]) + 256*ord(inp[i+1])    #B
-                if flag & 8:                                    #B
-                    i = inp.index('\0', i) + 1                  #B
-                if flag & 16:                                   #B
-                    i = inp.index('\0', i) + 1                  #B
-                if flag & 2:                                    #B
-                    i += 2                                      #B
+                # 分析头信息以便取得被压缩数据。
+                if inp[:3] != "\x1f\x8b\x08":                
+                    raise IOError("invalid gzip data")         
+                i = 10                                          
+                flag = ord(inp[3])                              
+                if flag & 4:                                    
+                    i += 2 + ord(inp[i]) + 256*ord(inp[i+1])    
+                if flag & 8:                                    
+                    i = inp.index('\0', i) + 1                  
+                if flag & 16:                                   
+                    i = inp.index('\0', i) + 1                  
+                if flag & 2:                                   
+                    i += 2                                     
 
-                if i > len(inp):                                #C
-                    raise IndexError("not enough data")         #C
-            except (IndexError, ValueError):                    #C
-                continue                                        #C
+                # 程序读取的头信息并不完整。
+                if i > len(inp):                               
+                    raise IndexError("not enough data")         
+            except (IndexError, ValueError):                    
+                continue                                       
 
             else:
-                block = inp[i:]                                 #D
-                inp = None                                      #D
-                decoder = zlib.decompressobj(-zlib.MAX_WBITS)   #D
+                # 已经找到头信息，准备好相应的解压程序。
+                block = inp[i:]                                 
+                inp = None                                      
+                decoder = zlib.decompressobj(-zlib.MAX_WBITS)   
                 if not block:
                     continue
 
-        if not block:                                           #E
-            yield decoder.flush()                               #E
+        # 所有数据已经处理完毕，向调用者返回最后剩下的数据块。
+        if not block:                                           
+            yield decoder.flush()                               
             break
 
-        yield decoder.decompress(block)                         #F
+        # 向调用者返回解压后的数据块。
+        yield decoder.decompress(block)                         
 # <end id="_1314_14473_9229"/>
-#A Read the raw data from Redis
-#B Parse the header information so that we can get the compressed data
-#C We haven't read the full header yet
-#D We found the header, prepare the decompressor
-#E We are out of data, yield the last chunk
-#F Yield a decompressed block
-#END
 
 class TestCh06(unittest.TestCase):
     def setUp(self):
