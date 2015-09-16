@@ -24,30 +24,30 @@ config_connection = None
 # 代码清单 5-1
 # <start id="recent_log"/>
 # 设置一个字典，它可以帮助我们将大部分日志的安全级别转换成某种一致的东西。
-SEVERITY = {                                                    #A
-    logging.DEBUG: 'debug',                                     #A
-    logging.INFO: 'info',                                       #A
-    logging.WARNING: 'warning',                                 #A
-    logging.ERROR: 'error',                                     #A
-    logging.CRITICAL: 'critical',                               #A
-}                                                               #A
-SEVERITY.update((name, name) for name in SEVERITY.values())     #A
+SEVERITY = {                                                   
+    logging.DEBUG: 'debug',                                    
+    logging.INFO: 'info',                                      
+    logging.WARNING: 'warning',                                
+    logging.ERROR: 'error',                                    
+    logging.CRITICAL: 'critical',                              
+}                                                              
+SEVERITY.update((name, name) for name in SEVERITY.values())    
 
 def log_recent(conn, name, message, severity=logging.INFO, pipe=None):
     # 尝试将日志的级别转换成简单的字符串。
-    severity = str(SEVERITY.get(severity, severity)).lower()    #B
+    severity = str(SEVERITY.get(severity, severity)).lower()   
     # 创建负责存储消息的键。
-    destination = 'recent:%s:%s'%(name, severity)               #C
+    destination = 'recent:%s:%s'%(name, severity)              
     # 将当前时间添加到消息里面，用于记录消息的发送时间。
-    message = time.asctime() + ' ' + message                    #D
+    message = time.asctime() + ' ' + message                   
     # 使用流水线来将通信往返次数降低为一次。
-    pipe = pipe or conn.pipeline()                              #E
+    pipe = pipe or conn.pipeline()                             
     # 将消息添加到日志列表的最前面。
-    pipe.lpush(destination, message)                            #F
+    pipe.lpush(destination, message)                           
     # 对日志列表进行修剪，让它只包含最新的100条消息。
-    pipe.ltrim(destination, 0, 99)                              #G
+    pipe.ltrim(destination, 0, 99)                             
     # 执行两个命令。
-    pipe.execute()                                              #H
+    pipe.execute()                                           
 # <end id="recent_log"/>
 
 
