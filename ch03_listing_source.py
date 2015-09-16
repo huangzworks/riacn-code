@@ -123,15 +123,14 @@ def update_token(conn, token, user, item=None):
     conn.zadd('recent:', token, timestamp)
     if item:
         key = 'viewed:' + token
-        conn.lrem(key, item)                    #A
-        conn.rpush(key, item)                   #B
-        conn.ltrim(key, -25, -1)                #C
+        # 如果指定的元素存在于列表当中，那么移除它
+        conn.lrem(key, item)
+        # 将元素推入到列表的右端，使得 ZRANGE 和 LRANGE 可以取得相同的结果
+        conn.rpush(key, item)
+        # 对列表进行修剪，让它最多只能保存 25 个元素
+        conn.ltrim(key, -25, -1)
     conn.zincrby('viewed:', item, -1)
 # <end id="exercise-update-token"/>
-#A Remove the item from the list if it was there
-#B Push the item to the right side of the LIST so that ZRANGE and LRANGE have the same result
-#C Trim the LIST to only include the most recent 25 items
-#END
 
 
 # 代码清单 3-5
@@ -389,28 +388,28 @@ def run_pubsub():
 
 # <start id="exercise-fix-article-vote"/>
 def article_vote(conn, user, article):
+    # 在进行投票之前，先检查这篇文章是否仍然处于可投票的时间之内
     cutoff = time.time() - ONE_WEEK_IN_SECONDS
-    posted = conn.zscore('time:', article)                      #A
+    posted = conn.zscore('time:', article)
     if posted < cutoff:
         return
 
     article_id = article.partition(':')[-1]
     pipeline = conn.pipeline()
     pipeline.sadd('voted:' + article_id, user)
-    pipeline.expire('voted:' + article_id, int(posted-cutoff))  #B
+    # 为文章的投票设置过期时间
+    pipeline.expire('voted:' + article_id, int(posted-cutoff))
     if pipeline.execute()[0]:
-        pipeline.zincrby('score:', article, VOTE_SCORE)         #C
-        pipeline.hincrby(article, 'votes', 1)                   #C
-        pipeline.execute()                                      #C
+        # 因为客户端可能会在执行 SADD/EXPIRE 之间或者执行 ZINCRBY/HINCRBY 之间掉线
+        # 所以投票可能会不被计数，但这总比在执行 ZINCRBY/HINCRBY 之间失败并导致不完整的计数要好
+        pipeline.zincrby('score:', article, VOTE_SCORE)
+        pipeline.hincrby(article, 'votes', 1)
+        pipeline.execute()
 # <end id="exercise-fix-article-vote"/>
-#A If the article should expire bewteen our ZSCORE and our SADD, we need to use the posted time to properly expire it
-#B Set the expiration time if we shouldn't have actually added the vote to the SET
-#C We could lose our connection between the SADD/EXPIRE and ZINCRBY/HINCRBY, so the vote may not count, but that is better than it partially counting by failing between the ZINCRBY/HINCRBY calls
-#END
 
-# Technically, the above article_vote() version still has some issues, which
-# are addressed in the following, which uses features/functionality not
-# introduced until chapter 4.
+# 从技术上来将，上面的 article_vote() 函数仍然有一些问题，
+# 这些问题可以通过下面展示的这段代码来解决，
+# 这段代码里面用到了本书第 4 章才会介绍的技术
 
 def article_vote(conn, user, article):
     cutoff = time.time() - ONE_WEEK_IN_SECONDS
@@ -443,18 +442,18 @@ def get_articles(conn, page, order='score:'):
     ids = conn.zrevrangebyscore(order, start, end)
 
     pipeline = conn.pipeline()
+    # 将等待执行的多个 HGETALL 调用放入流水线
     map(pipeline.hgetall, ids)                              #A
 
     articles = []
+    # 执行被流水线包含的多个 HGETALL 命令，
+    # 并将执行所得的多个 id 添加到 articles 变量里面
     for id, article_data in zip(ids, pipeline.execute()):   #B
         article_data['id'] = id
         articles.append(article_data)
 
     return articles
 # <end id="exercise-fix-get_articles"/>
-#A Prepare the HGETALL calls on the pipeline
-#B Execute the pipeline and add ids to the article
-#END
 
 
 # 代码清单 3-15
@@ -479,16 +478,21 @@ True                                            #
 # <start id="exercise-no-recent-zset"/>
 THIRTY_DAYS = 30*86400
 def check_token(conn, token):
-    return conn.get('login:' + token)       #A
+    # 为了能够对登录令牌进行过期，我们将把它存储为字符串值
+    return conn.get('login:' + token)
 
 def update_token(conn, token, user, item=None):
-    conn.setex('login:' + token, user, THIRTY_DAYS) #B
+    # 在一次命令调用里面，同时为字符串键设置值和过期时间
+    conn.setex('login:' + token, user, THIRTY_DAYS)
     key = 'viewed:' + token
     if item:
         conn.lrem(key, item)
         conn.rpush(key, item)
         conn.ltrim(key, -25, -1)
-    conn.expire(key, THIRTY_DAYS)                   #C
+    # 跟字符串不一样，Redis 并没有提供能够在操作列表的同时，
+    # 为列表设置过期时间的命令，
+    # 所以我们需要在这里调用 EXPIRE 命令来为列表设置过期时间
+    conn.expire(key, THIRTY_DAYS)
     conn.zincrby('viewed:', item, -1)
 
 def add_to_cart(conn, session, item, count):
@@ -497,10 +501,6 @@ def add_to_cart(conn, session, item, count):
         conn.hrem(key, item)
     else:
         conn.hset(key, item, count)
-    conn.expire(key, THIRTY_DAYS)               #D
+    # 散列也和列表一样，需要通过调用 EXPIRE 命令来设置过期时间
+    conn.expire(key, THIRTY_DAYS)
 # <end id="exercise-no-recent-zset"/>
-#A We are going to store the login token as a string value so we can EXPIRE it
-#B Set the value of the the login token and the token's expiration time with one call
-#C We can't manipulate LISTs and set their expiration at the same time, so we must do it later
-#D We also can't manipulate HASHes and set their expiration times, so we again do it later
-#END
