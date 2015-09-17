@@ -266,150 +266,115 @@ def unfollow_user(conn, uid, other_uid):
 # <start id="exercise-refilling-timelines"/>
 REFILL_USERS_STEP = 50
 def refill_timeline(conn, incoming, timeline, start=0):
-    if not start and conn.zcard(timeline) >= 750:               #A
-        return                                                  #A
+    if not start and conn.zcard(timeline) >= 750:               # 如果时间线已经被填满了 3/4 或以上
+        return                                                  # 那么不对它进行重新填充
 
-    users = conn.zrangebyscore(incoming, start, 'inf',          #B
-        start=0, num=REFILL_USERS_STEP, withscores=True)        #B
+    users = conn.zrangebyscore(incoming, start, 'inf',          # 获取一组用户，这些用户发布的消息将被用于填充时间线
+        start=0, num=REFILL_USERS_STEP, withscores=True)        #
 
     pipeline = conn.pipeline(False)
     for uid, start in users:
-        pipeline.zrevrange('profile:%s'%uid,                    #C
-            0, HOME_TIMELINE_SIZE-1, withscores=True)           #C
+        pipeline.zrevrange('profile:%s'%uid,                    # 从正在关注的人哪里获取最新的状态消息
+            0, HOME_TIMELINE_SIZE-1, withscores=True)           #
 
     messages = []
     for results in pipeline.execute():
-        messages.extend(results)                            #D
+        messages.extend(results)                            # 将取得的所有状态消息放到一起
 
-    messages.sort(key=lambda x:-x[1])                       #E
-    del messages[HOME_TIMELINE_SIZE:]                       #E
+    messages.sort(key=lambda x:-x[1])                       # 根据发布时间对取得的所有状态消息进行排序，
+    del messages[HOME_TIMELINE_SIZE:]                       # 并保留其中最新的 100 条状态消息
 
     pipeline = conn.pipeline(True)
     if messages:
-        pipeline.zadd(timeline, **dict(messages))           #F
-    pipeline.zremrangebyrank(                               #G
-        timeline, 0, -HOME_TIMELINE_SIZE-1)                 #G
+        pipeline.zadd(timeline, **dict(messages))           # 将挑选出的状态消息添加到用户的主页时间线上面
+    pipeline.zremrangebyrank(                               # 对时间线进行修剪，只保留最新的 100 条状态消息
+        timeline, 0, -HOME_TIMELINE_SIZE-1)                 #
     pipeline.execute()
 
     if len(users) >= REFILL_USERS_STEP:
-        execute_later(conn, 'default', 'refill_timeline',       #H
-            [conn, incoming, timeline, start])                  #H
+        execute_later(conn, 'default', 'refill_timeline',       # 如果还要其他用户的时间线需要进行重新填充，
+            [conn, incoming, timeline, start])                  # 那么继续执行这个动作
 # <end id="exercise-refilling-timelines"/>
-#A If the timeline is 3/4 of the way full already, don't bother refilling it
-#B Fetch a group of users that should contribute to this timeline
-#C Fetch the most recent status messages from the users followed
-#D Group all of the fetched status messages together
-#E Sort all of the status messages by how recently they were posted, and keep the most recent 1000
-#F Add all of the fetched status messages to the user's home timeline
-#G Remove any messages that are older than the most recent 1000
-#H If there are still more users left to fetch from, keep going
-#END
 
 # <start id="exercise-follow-user-list"/>
 def follow_user_list(conn, uid, other_uid, list_id):
-    fkey1 = 'list:in:%s'%list_id            #A
-    fkey2 = 'list:out:%s'%other_uid         #A
-    timeline = 'list:statuses:%s'%list_id   #A
+    fkey1 = 'list:in:%s'%list_id            # 把相关的键名缓存起来
+    fkey2 = 'list:out:%s'%other_uid         #
+    timeline = 'list:statuses:%s'%list_id   #
 
-    if conn.zscore(fkey1, other_uid):   #B
-        return None                     #B
+    if conn.zscore(fkey1, other_uid):   # 如果 other_uid 已经包含在列表里面，
+        return None                     # 那么直接返回
 
     now = time.time()
 
     pipeline = conn.pipeline(True)
-    pipeline.zadd(fkey1, other_uid, now)        #C
-    pipeline.zadd(fkey2, list_id, now)          #C
-    pipeline.zcard(fkey1)                       #D
-    pipeline.zrevrange('profile:%s'%other_uid,      #E
-        0, HOME_TIMELINE_SIZE-1, withscores=True)   #E
+    pipeline.zadd(fkey1, other_uid, now)        # 将各个用户ID添加到相应的有序集合里面
+    pipeline.zadd(fkey2, list_id, now)          #
+    pipeline.zcard(fkey1)                       # 获取有序集合的大小
+    pipeline.zrevrange('profile:%s'%other_uid,      # 从用户的个人时间线里面获取最新的状态消息
+        0, HOME_TIMELINE_SIZE-1, withscores=True)   #
     following, status_and_score = pipeline.execute()[-2:]
 
-    pipeline.hset('list:%s'%list_id, 'following', following)    #F
-    pipeline.zadd(timeline, **dict(status_and_score))           #G
-    pipeline.zremrangebyrank(timeline, 0, -HOME_TIMELINE_SIZE-1)#G
+    pipeline.hset('list:%s'%list_id, 'following', following)    # 对存储列表信息的散列进行更新，将列表的新大小记录到散列里面
+    pipeline.zadd(timeline, **dict(status_and_score))           # 对列表的状态消息进行更新
+    pipeline.zremrangebyrank(timeline, 0, -HOME_TIMELINE_SIZE-1)#
 
     pipeline.execute()
-    return True                         #H
+    return True                         # 返回 True 值，表示用户已经被添加到列表里面
 # <end id="exercise-follow-user"/>
-#A Cache the key names
-#B If the other_uid is already being followed by the list, return
-#C Add the uids to the proper ZSETs
-#D Find the size of the list ZSET
-#E Fetch the most recent status messages from the user's profile timeline
-#F Update the known size of the list ZSETs in the list information HASH
-#G Update the list of status messages
-#H Return that adding the user to the list completed successfully
-#END
 
 # <start id="exercise-unfollow-user-list"/>
 def unfollow_user_list(conn, uid, other_uid, list_id):
-    fkey1 = 'list:in:%s'%list_id            #A
-    fkey2 = 'list:out:%s'%other_uid         #A
-    timeline = 'list:statuses:%s'%list_id   #A
+    fkey1 = 'list:in:%s'%list_id            # 把相关的键名缓存起来
+    fkey2 = 'list:out:%s'%other_uid         #
+    timeline = 'list:statuses:%s'%list_id   #
 
-    if not conn.zscore(fkey1, other_uid):   #B
-        return None                         #B
+    if not conn.zscore(fkey1, other_uid):   # 如果用户并未关注 other_uid ，
+        return None                         # 那么直接返回
 
     pipeline = conn.pipeline(True)
-    pipeline.zrem(fkey1, other_uid)                 #C
-    pipeline.zrem(fkey2, list_id)                   #C
-    pipeline.zcard(fkey1)                           #D
-    pipeline.zrevrange('profile:%s'%other_uid,      #E
-        0, HOME_TIMELINE_SIZE-1)                    #E
+    pipeline.zrem(fkey1, other_uid)                 # 从相应的有序集合里面移除各个用户ID
+    pipeline.zrem(fkey2, list_id)                   #
+    pipeline.zcard(fkey1)                           # 获取有序集合的大小
+    pipeline.zrevrange('profile:%s'%other_uid,      # 从被取消关注的用户那里获取他最新发布的状态消息
+        0, HOME_TIMELINE_SIZE-1)                    #
     following, statuses = pipeline.execute()[-2:]
 
-    pipeline.hset('list:%s'%list_id, 'following', following)    #F
+    pipeline.hset('list:%s'%list_id, 'following', following)    # 对存储列表信息的散列进行更新，将列表的新大小记录到散列里面
     if statuses:
-        pipeline.zrem(timeline, *statuses)                      #G
-        refill_timeline(fkey1, timeline)                        #H
+        pipeline.zrem(timeline, *statuses)                      # 从时间线里面移除被取消关注的用户所发布的状态消息
+        refill_timeline(fkey1, timeline)                        # 重新填充时间线
 
     pipeline.execute()
-    return True                         #I
+    return True                         # 返回 True 值，表示用户已经被取消关注
 # <end id="exercise-unfollow-user-list"/>
-#A Cache the key names
-#B If the other_uid is not being followed by the list, return
-#C Remove the uids from the proper ZSETs
-#D Find the size of the list ZSET
-#E Fetch the most recent status messages from the user that we stopped following
-#F Update the known size of the list ZSETs in the list information HASH
-#G Update the list timeline, removing any status messages from the previously followed user
-#H Start refilling the list timeline
-#I Return that the unfollow executed successfully
-#END
 
 # <start id="exercise-create-user-list"/>
 def create_user_list(conn, uid, name):
     pipeline = conn.pipeline(True)
-    pipeline.hget('user:%s'%uid, 'login')   #A
-    pipeline.incr('list:id:')               #B
+    pipeline.hget('user:%s'%uid, 'login')   # 获取创建列表的用户的用户名
+    pipeline.incr('list:id:')               # 生成一个新的列表ID
     login, id = pipeline.execute()
 
-    if not login:               #C
-        return None             #C
+    if not login:               # 如果用户不存在，那么直接返回
+        return None             #
 
     now = time.time()
 
     pipeline = conn.pipeline(True)
-    pipeline.zadd('lists:%s'%uid, **{id: now})  #D
-    pipeline.hmset('list:%s'%id, {              #E
-        'name': name,                           #E
-        'id': id,                               #E
-        'uid': uid,                             #E
-        'login': login,                         #E
-        'following': 0,                         #E
-        'created': now,                         #E
+    pipeline.zadd('lists:%s'%uid, **{id: now})  # 将新创建的列表添加到用户已经创建了的有序集合里面
+    pipeline.hmset('list:%s'%id, {              # 创建记录列表信息的散列
+        'name': name,                           #
+        'id': id,                               #
+        'uid': uid,                             #
+        'login': login,                         #
+        'following': 0,                         #
+        'created': now,                         #
     })
     pipeline.execute()
 
-    return id           #F
+    return id           # 返回新列表的ID
 # <end id="exercise-create-user-list"/>
-#A Fetch the login name of the user who is creating the list
-#B Generate a new list id
-#C If the user doesn't exist, return
-#D Add the new list to a ZSET of lists that the user has created
-#E Create the list information HASH
-#F Return the new list id
-#END
 
 
 # 代码清单 8-6
@@ -468,35 +433,29 @@ def syndicate_status(conn, uid, post, start=0):
 
 # <start id="syndicate-message-list"/>
 def syndicate_status_list(conn, uid, post, start=0, on_lists=False):
-    key = 'followers:%s'%uid            #A
-    base = 'home:%s'                    #A
-    if on_lists:                        #A
-        key = 'list:out:%s'%uid         #A
-        base = 'list:statuses:%s'       #A
-    followers = conn.zrangebyscore(key, start, 'inf',   #B
-        start=0, num=POSTS_PER_PASS, withscores=True)   #B
+    key = 'followers:%s'%uid            # 根据操作的处理进度（depending on how far along we are），
+    base = 'home:%s'                    # 选择对主页时间线还是对用户时间线进行操作
+    if on_lists:                        #
+        key = 'list:out:%s'%uid         #
+        base = 'list:statuses:%s'       #
+    followers = conn.zrangebyscore(key, start, 'inf',   # 从上次更新时的最后一个用户或者列表作为起点，
+        start=0, num=POSTS_PER_PASS, withscores=True)   # 获取下一组用户或者列表（数量为 1000 个）
 
     pipeline = conn.pipeline(False)
-    for follower, start in followers:                   #C
-        pipeline.zadd(base%follower, **post)            #C
-        pipeline.zremrangebyrank(                       #C
-            base%follower, 0, -HOME_TIMELINE_SIZE-1)    #C
+    for follower, start in followers:                   # 将状态消息添加到所有已获取关注者的主页时间线里面
+        pipeline.zadd(base%follower, **post)            #
+        pipeline.zremrangebyrank(                       #
+            base%follower, 0, -HOME_TIMELINE_SIZE-1)    #
     pipeline.execute()
 
-    if len(followers) >= POSTS_PER_PASS:                    #D
-        execute_later(conn, 'default', 'syndicate_status',  #D
-            [conn, uid, post, start, on_lists])             #D
+    if len(followers) >= POSTS_PER_PASS:                    # 如果已经对至少 1000 个用户进行了更新，
+        execute_later(conn, 'default', 'syndicate_status',  # 那么将后续的更新操作留到下次再进行
+            [conn, uid, post, start, on_lists])             #
 
     elif not on_lists:
-        execute_later(conn, 'default', 'syndicate_status',  #E
-            [conn, uid, post, 0, True])                     #E
+        execute_later(conn, 'default', 'syndicate_status',  # 如果针对列表的操作并未完成，那么对列表进行操作
+            [conn, uid, post, 0, True])                     # 如果操作只是对主页时间线执行的话，那么程序无需执行这一步
 # <end id="syndicate-message-list"/>
-#A Use keys for home timelines or list timelines, depending on how far along we are
-#B Fetch the next group of 1000 followers or lists, starting at the last user or list to be updated last time
-#C Add the status to the home timelines of all of the fetched followers, and trim the home timelines so they don't get too big
-#D If at least 1000 followers had received an update, execute the remaining updates in a task
-#E Start executing over lists if we haven't executed over lists yet, but we are done with home timelines
-#END
 
 
 # 代码清单 8-8
@@ -531,33 +490,27 @@ def delete_status(conn, uid, status_id):
 
 # <start id="exercise-clean-out-timelines"/>
 def clean_timelines(conn, uid, status_id, start=0, on_lists=False):
-    key = 'followers:%s'%uid            #A
-    base = 'home:%s'                    #A
-    if on_lists:                        #A
-        key = 'list:out:%s'%uid         #A
-        base = 'list:statuses:%s'       #A
-    followers = conn.zrangebyscore(key, start, 'inf',   #B
-        start=0, num=POSTS_PER_PASS, withscores=True)   #B
+    key = 'followers:%s'%uid            # 根据操作的处理进度，
+    base = 'home:%s'                    # 选择对主页时间线还是对用户时间线进行操作
+    if on_lists:                        #
+        key = 'list:out:%s'%uid         #
+        base = 'list:statuses:%s'       #
+    followers = conn.zrangebyscore(key, start, 'inf',   # 从上次更新时的最后一个用户或者列表作为起点，
+        start=0, num=POSTS_PER_PASS, withscores=True)   # 获取下一组用户或者列表（数量为 1000 个）
 
     pipeline = conn.pipeline(False)
-    for follower, start in followers:                    #C
-        pipeline.zrem(base%follower, status_id)          #C
+    for follower, start in followers:                    # 从所有已获取的关注者的主页时间线上面，
+        pipeline.zrem(base%follower, status_id)          # 移除指定的状态消息
     pipeline.execute()
 
-    if len(followers) >= POSTS_PER_PASS:                    #D
-        execute_later(conn, 'default', 'clean_timelines' ,  #D
-            [conn, uid, status_id, start, on_lists])        #D
+    if len(followers) >= POSTS_PER_PASS:                    # 如果本次更新已经处理了至少 1000 个关注者，
+        execute_later(conn, 'default', 'clean_timelines' ,  # 那么将后续的工作留到下次再执行
+            [conn, uid, status_id, start, on_lists])        #
 
     elif not on_lists:
-        execute_later(conn, 'default', 'clean_timelines',   #E
-            [conn, uid, status_id, 0, True])                #E
+        execute_later(conn, 'default', 'clean_timelines',   # 如果针对列表的操作并未完成，那么对列表进行操作
+            [conn, uid, status_id, 0, True])                # 如果操作只是对主页时间线执行的话，那么程序无需执行这一步
 # <end id="exercise-clean-out-timelines"/>
-#A Use keys for home timelines or list timelines, depending on how far along we are
-#B Fetch the next group of 1000 followers or lists, starting at the last user or list to be updated last time
-#C Remove the status from the home timelines of all of the fetched followers
-#D If at least 1000 followers had received an update, execute the remaining updates in a task
-#E Start executing over lists if we haven't executed over lists yet, but we are done with home timelines
-#END
 
 
 # 代码清单 8-9
@@ -913,17 +866,12 @@ def filter_content(identifier, method, name, args, quit):
         time.sleep(.1)
 '''
 # <start id="start-http-server"/>
-if __name__ == '__main__':                  #A
-    server = StreamingAPIServer(                        #B
-        ('localhost', 8080), StreamingAPIRequestHandler)#B
-    print 'Starting server, use <Ctrl-C> to stop'       #C
-    server.serve_forever()                  #D
+if __name__ == '__main__':                  # 如果这个模块是以命令行方式运行的，那么执行下方的代码块
+    server = StreamingAPIServer(                        # 创建一个流API服务器实例，并让它监视本地主机的 8080 端口，
+        ('localhost', 8080), StreamingAPIRequestHandler)# 然后使用 StreamingAPIRequestHandler 去处理请求
+    print 'Starting server, use <Ctrl-C> to stop'       # 打印信息行
+    server.serve_forever()                  # 一直运行，直到这个进程被杀死为止
 # <end id="start-http-server"/>
-#A Run the below block of code if this module is being run from the command line
-#B Create an insteance of the streaming API server listening on localhost port 8080, and use the StreamingAPIRequestHandler to process requests
-#C Print an informational line
-#D Run the server until someone kills it
-#END
 '''
 
 class TestCh08(unittest.TestCase):
