@@ -343,20 +343,16 @@ def string_to_score_generic(string, mapping):
 
 # <start id="zadd-string"/>
 def zadd_string(conn, name, *args, **kwargs):
-    pieces = list(args)                         #A
-    for piece in kwargs.iteritems():            #A
-        pieces.extend(piece)                    #A
+    pieces = list(args)                         # 为了进行之后的修改，
+    for piece in kwargs.iteritems():            # 对传入的不同类型的参数进行合并（combine）
+        pieces.extend(piece)                    #
 
     for i, v in enumerate(pieces):
-        if i & 1:                               #B
-            pieces[i] = string_to_score(v)      #B
+        if i & 1:                               # 将字符串格式的分值转换为整数分值
+            pieces[i] = string_to_score(v)      #
 
-    return conn.zadd(name, *pieces)             #C
+    return conn.zadd(name, *pieces)             # 调用已有的 ZADD 方法
 # <end id="zadd-string"/>
-#A Combine both types of arguments passed for later modification
-#B Convert string scores to integer scores
-#C Call the existing ZADD method
-#END
 
 
 # 代码清单 7-9
