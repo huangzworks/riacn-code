@@ -181,10 +181,8 @@ def get_sharded_connection(component, key, shard_count, wait=1):
 def log_recent(conn, app, message):
     'the old log_recent() code'
 
-log_recent = redis_connection('logs')(log_recent)   #A
+log_recent = redis_connection('logs')(log_recent)   # 通过反复执行 3 次这行代码，可以达到和装饰器一样的效果
 # <end id="no-decorator-example"/>
-#A This performs the equivalent decoration, but requires repeating the 'log_recent' function name 3 times
-#END
 
 # 代码清单 10-3
 # <start id="shard-aware-decorator"/>
