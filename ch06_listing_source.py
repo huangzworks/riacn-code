@@ -653,7 +653,7 @@ def daily_country_aggregate(conn, line):
 # <end id="_1314_15044_3669"/>
 
 
-# 代码清单 2-30
+# 代码清单 6-30
 # <start id="_1314_14473_9209"/>
 def copy_logs_to_redis(conn, path, channel, count=10,
                        limit=2**30, quit_when_done=True):
