@@ -147,6 +147,7 @@ user@vpn-master ~:$
 #END
 '''
 
+# 代码清单 4-5
 # <start id="_1313_14472_8342"/>
 def list_item(conn, itemid, sellerid, price):
     inventory = "inventory:%s"%sellerid
