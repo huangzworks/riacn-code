@@ -625,7 +625,7 @@ def leave_chat(conn, chat_id, user):
         oldest = conn.zrange(                                  
             'chat:' + chat_id, 0, 0, withscores=True)          
         # 删除那些已经被所有成员阅读过的消息。
-        conn.zremrangebyscore('chat:' + chat_id, 0, oldest[0][1])    
+        conn.zremrangebyscore('msgs:' + chat_id, 0, oldest[0][1])
 # <end id="_1314_14473_9136"/>
 
 
