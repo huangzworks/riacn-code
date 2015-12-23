@@ -590,7 +590,7 @@ def fetch_pending_messages(conn, recipient):
 # <end id="_1314_14473_9132"/>
 
 
-# 代码清单 2-27
+# 代码清单 6-27
 # <start id="_1314_14473_9135"/>
 def join_chat(conn, chat_id, user):
     # 取得最新群组消息的ID。
@@ -605,7 +605,7 @@ def join_chat(conn, chat_id, user):
 # <end id="_1314_14473_9135"/>
 
 
-# 代码清单 2-28
+# 代码清单 6-28
 # <start id="_1314_14473_9136"/>
 def leave_chat(conn, chat_id, user):
     pipeline = conn.pipeline(True)
@@ -629,7 +629,7 @@ def leave_chat(conn, chat_id, user):
 # <end id="_1314_14473_9136"/>
 
 
-# 代码清单 2-29
+# 代码清单 6-29
 # <start id="_1314_15044_3669"/>
 # 本地聚合数据字典。
 aggregates = defaultdict(lambda: defaultdict(int))     
