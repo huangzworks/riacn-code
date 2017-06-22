@@ -93,7 +93,7 @@ def wait_for_sync(mconn, sconn):
     mconn.zadd('sync:wait', identifier, time.time()) 
 
     # 如果有必要的话，等待从服务器完成同步。
-    while not sconn.info()['master_link_status'] != 'up': 
+    while sconn.info()['master_link_status'] != 'up': 
         time.sleep(.001)
 
     # 等待从服务器接收数据更新。

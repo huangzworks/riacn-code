@@ -180,7 +180,7 @@ def update_token(conn, token, user, item=None):
 def rescale_viewed(conn):
     while not QUIT:
         # 删除所有排名在20 000名之后的商品。
-        conn.zremrangebyrank('viewed:', 0, -20001) 
+        conn.zremrangebyrank('viewed:', 20000, -1)
         # 将浏览次数降低为原来的一半
         conn.zinterstore('viewed:', {'viewed:': .5}) 
         # 5分钟之后再执行这个操作。
