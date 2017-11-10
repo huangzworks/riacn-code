@@ -228,7 +228,7 @@ def release_lock(conn, lockname, identifier):
     while True:
         try:
             # 检查并确认进程还持有着锁。
-            pipe.watch(lockname)                  
+            pipe.watch(lockname)
             #这里的value是byte类型，所以要转换成string类型，才能进入释放锁的环节
             value = pipe.get(lockname)
             value = str(value, encoding = "utf-8")
